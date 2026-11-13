@@ -5,7 +5,7 @@
 - **Created**: 2026-11-13
 - **Updated**: 2026-11-13
 
-> Imported from GridTools/gt4py (`docs/development/ADRs/ci/0001-sandboxed-agent-pr-review.md`, draft PR 2985), where it was written for an in-repository workflow. Only links were changed. Packaging it as a reusable workflow, and what that changes, is [ADR 0002](0002-reusable-workflow.md).
+> First written in GridTools/gt4py (draft PR 2985) for an in-repository workflow, before the pipeline moved here; GT4Py's copy was then removed, and this is the only record. Wording that referred to GT4Py is kept where it is the context of the decision. Packaging the workflow for reuse, and what that changes, is [ADR 0002](0002-reusable-workflow.md); what GT4Py configures and accepts is in its [agent-review.md](https://github.com/GridTools/gt4py/blob/main/docs/development/tools/agent-review.md).
 
 Why-statement: In the context of advisory AI review of pull requests, including PRs from forks, facing the need to let a tool-using coding agent explore untrusted PR content next to an inference credential, we decided to run the agent inside the AWF sandbox from a `pull_request_target` workflow split into four jobs, with the harness as a pluggable adapter, to achieve reviews that can read the whole repository while no secret is readable by the agent or by PR code. We considered running the agent directly on the runner, a `pull_request`-only workflow, and an external proxy with OIDC token exchange, and accept that a sandbox escape would expose a low-budget key, that an injected agent can spend that key's budget, and that prompt injection can still steer the review's text.
 
@@ -17,7 +17,7 @@ Why-statement: In the context of advisory AI review of pull requests, including 
 - The CSCS inference key is billed against the project's allocation; a write-capable token could alter the repository.
 - Agent harnesses are third-party code with frequent releases, some with install scripts, and which one works best with the CSCS models is not yet known.
 - The agent reads instruction files (`AGENTS.md`, harness configuration) from the repository, which a PR can change.
-- `.github/workflows/pr-agent.yml` must not be disturbed.
+- In GT4Py, PR Agent's workflow (`.github/workflows/pr-agent.yml`) must not be disturbed: the agent review is a separate workflow, with its own key, event policy and comments, and uses no comment commands.
 
 ## Decision
 
@@ -38,7 +38,7 @@ We chose AWF because it is the only option that provides credential isolation, e
 - Harnesses can be compared and replaced without changing the workflow.
 - The design depends on AWF's isolation; a kernel, Docker or AWF escape (AWF runs as root, and its key-holding sidecar parses the sandbox's requests) exposes the key on the host. The key is dedicated (its own secret, in its own environment, with its own CSCS budget), low-budget and quick to rotate; gVisor is a later hardening step.
 - AWF's turn cap is not a hard cap against an injected agent with a shell (it counts only some paths, after the response), and AWF neither restricts paths under `/v1` nor clamps `max_tokens`. Within a run, the bound is AWF's request rate limit; across runs, the dedicated key's CSCS budget is the only hard cap.
-- `pull_request_target` needs a repository or organization Actions event policy that allows it for this workflow file: GitHub blocks it by default in public repositories from December 2026. When this ADR was written, GridTools/gt4py had the `agent-review` environment (restricted to `main`, holding the dedicated key) and the repository variables (`opencode`, `zai-org/GLM-5.3-Flash`), but its only event policy covered PR Agent's workflow; one for `agent-review.yml` allowing `pull_request_target` and `workflow_dispatch` is still to be added.
+- `pull_request_target` needs a repository or organization Actions event policy that allows it for the workflow file: GitHub blocks it by default in public repositories from December 2026. Each adopting repository therefore needs the policy (`pull_request_target` and `workflow_dispatch`), the environment restricted to the default branch with the dedicated key, and the variables, besides the workflow itself; [agent-review.md](../agent-review.md#required-settings-in-the-calling-repository) lists them, and a repository's own deployment state is recorded in its documentation.
 - Prompt injection can still steer review content (false approvals, misleading findings). The review stays advisory, never a status check, and names the commit it reviewed.
 - Changes to the workflow can only be tested from a fork or a branch with a temporary `push` trigger, since `pull_request_target` reads the workflow from the default branch.
 - AWF, its images and each harness are pinned and must be upgraded by reviewed PRs.
@@ -69,4 +69,6 @@ We chose AWF because it is the only option that provides credential isolation, e
 
 - [agent-review.md](../agent-review.md): usage, invariants, configuration, adapter contract.
 - [pr-agent.md](https://github.com/GridTools/gt4py/blob/main/docs/development/tools/pr-agent.md): GT4Py's diff-based reviewer.
+- [GT4Py's agent-review.md](https://github.com/GridTools/gt4py/blob/main/docs/development/tools/agent-review.md): why GT4Py uses the review, its settings and the risks it accepts.
+- [ADR 0002](0002-reusable-workflow.md): the reusable-workflow packaging.
 - [AWF documentation](https://github.com/github/gh-aw-firewall)
