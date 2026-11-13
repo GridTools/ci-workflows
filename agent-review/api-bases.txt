@@ -1,0 +1,10 @@
+# Inference endpoints the inference key may be sent to: exact base URLs, one
+# per line, compared byte for byte with the caller's 'api_base' input (no
+# normalisation: no trailing '/', no port, no other spelling). The first entry
+# is the default, used when 'api_base' is empty.
+#
+# The key goes only to a host named here, in the commit the caller pinned, so
+# a caller (or whoever can edit the variable a caller maps to 'api_base')
+# cannot redirect it. Extend this list only by a reviewed release; a new
+# entry is a breaking change for the security model, flag it in the notes.
+https://api.inference.cscs.ch/v1
