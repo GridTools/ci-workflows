@@ -283,8 +283,8 @@ jobs:
               actor=${ACTOR}
               ;;
             pull_request | push | schedule)
-              # Nothing to spend and nothing to post, so no writer check:
-              # Dependabot's pull requests get the self-test too.
+              # Nothing to spend and nothing to post, so no writer check (meant
+              # to let Dependabot's pull requests run the self-test too).
               [ "${self_test}" = true ] || fail "Event '${EVENT}' is for the self-test of ${TRUSTED_REPO} with the 'stub' harness only."
               pr=${IN_PR}
               resolve_pr "${pr}"

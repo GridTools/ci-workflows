@@ -24,8 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FIXTURE_REPO: GridTools/gt4py
-  FIXTURE_PR: "2983"
+  # Head of the fixture (GridTools/gt4py PR 2983, set in the 'e2e' inputs).
   FIXTURE_HEAD_SHA: 46e9c4f3cecc6571b36b219994f8b126602513ff
 
 jobs:
@@ -62,6 +61,33 @@ jobs:
             echo "::endgroup::"
           done
           exit "${rc}"
+
+  # The model-calling adapters' installers, as the 'prepare' job runs them:
+  # pinned versions with integrity checks, no install scripts, no harness
+  # code executed (the version check runs inside the sandbox).
+  adapters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [opencode, pi]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install ${{ matrix.harness }}
+        env:
+          HARNESS: ${{ matrix.harness }}
+        run: |
+          prefix="${RUNNER_TEMP}/harness"
+          bash "agent-review/harnesses/${HARNESS}/install.sh" "${prefix}"
+          version=$(head -n 1 "${prefix}/VERSION")
+          echo "${HARNESS} ${version}"
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$ ]]
+          [ "$(head -n 1 "agent-review/harnesses/${HARNESS}/wire")" = openai-chat ]
 
   e2e:
     uses: ./.github/workflows/agent-review.yml
