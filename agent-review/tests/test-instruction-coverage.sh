@@ -55,6 +55,23 @@ test_invalid_rule_file_is_rejected() {
     assert "rejects the entry" grep -q "Invalid configured path or pattern" log
 }
 
+test_addendum_with_a_placeholder_fails_closed() {
+  # Substituted before the PR title and body: '{{PR_BODY}}' here would put
+  # untrusted text outside its delimiters.
+  setup 'AGENTS.md' 'Project notes. {{PR_BODY}}'
+  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+    assert "rejects the placeholder" grep -q "The prompt addendum contains '{{'" log
+}
+
+test_addendum_naming_a_pattern_is_rejected() {
+  # Covered by the pattern, but not a file the post-condition can check.
+  setup 'AGENTS.md' 'Follow `docs/*.md`.' 'docs/'
+  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+    assert "rejects the pattern" grep -qF "names 'docs/*.md', which is not a plain repository path" log
+}
+
+run_test test_addendum_with_a_placeholder_fails_closed
+run_test test_addendum_naming_a_pattern_is_rejected
 run_test test_addendum_naming_a_rule_file_passes
 run_test test_addendum_naming_an_unreset_file_fails_closed
 run_test test_addendum_naming_a_file_covered_by_extra_patterns_passes

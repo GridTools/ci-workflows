@@ -128,12 +128,27 @@ covered() {
   return 1
 }
 # Fail closed: a file the addendum names as a rule must be reset too, or a PR
-# could rewrite it and have the agent follow the PR's version.
+# could rewrite it and have the agent follow the PR's version. This early
+# check uses bash matching, where '*' also crosses '/', unlike the git
+# pathspecs of the reset; the post-condition after the reset
+# ('verify_followed_files') is what enforces it.
 ADDENDUM_FILE="${CONFIG_DIR}/prompt-addendum.md"
+ADDENDUM_NAMED=()
 if [ -s "${ADDENDUM_FILE}" ]; then
-  while IFS= read -r named; do
+  # The addendum is substituted into the prompt before the untrusted PR
+  # title and body; a placeholder in it would be expanded with them, outside
+  # their delimiters.
+  if grep -qF '{{' "${ADDENDUM_FILE}"; then
+    die "The prompt addendum contains '{{'; placeholders are not allowed there."
+  fi
+  mapfile -t ADDENDUM_NAMED < <(grep -oE '`[^`[:space:]]+\.(md|mdc|txt|toml|ya?ml|json|jsonc)`' "${ADDENDUM_FILE}" | tr -d '`' | sort -u)
+  for named in "${ADDENDUM_NAMED[@]}"; do
+    # A path from the repository root, which the post-condition can check.
+    case "/${named}/" in */../* | */./* | *//* | *[*?[]*)
+      die "The prompt addendum names '${named}', which is not a plain repository path." ;;
+    esac
     covered "${named}" || die "The prompt addendum names '${named}', which no reset pattern covers; add it to rule_files."
-  done < <(grep -oE '`[^`[:space:]]+\.(md|mdc|txt|toml|ya?ml|json|jsonc)`' "${ADDENDUM_FILE}" | tr -d '`' | sort -u)
+  done
 fi
 
 ADAPTER_DIR="${TRUSTED_ROOT}/harnesses/${HARNESS}"
@@ -164,6 +179,48 @@ git_safe() {
 }
 
 PROMPT_FILE="${WS}/prompt.md"
+
+# Post-condition of the reset: every file the prompt tells the agent to
+# follow (each rule file, and each file the addendum names, as a path from
+# the repository root) is exactly its base version, or absent in both the
+# base and the checkout. Checked on the result rather than on the patterns,
+# so a pattern that does not match what it seems to cannot let the PR's
+# version through. No leading directory may be a symlink, so the path in the
+# checkout is the path git wrote.
+verify_followed_files() {
+  local path entry mode type id rest dir
+  for path in "${RULE_FILES[@]}" "${ADDENDUM_NAMED[@]}"; do
+    [ -n "${path}" ] || continue
+    case "/${path}/" in */../* | */./* | *//* | *[*?[]*) die "Invalid followed file '${path}': not a plain path." ;; esac
+    dir=${path}
+    while [[ "${dir}" == */* ]]; do
+      dir=${dir%/*}
+      [ ! -L "${REPO_DIR}/${dir}" ] || die "Followed file '${path}': '${dir}' is a symlink in the checkout."
+    done
+    entry=$(git_safe ls-tree --full-tree "${BASE_SHA}" -- "${path}")
+    if [ -z "${entry}" ]; then
+      if [ -e "${REPO_DIR}/${path}" ] || [ -L "${REPO_DIR}/${path}" ]; then
+        die "Followed file '${path}' is not in the base commit but is in the checkout: the reset missed it."
+      fi
+      continue
+    fi
+    read -r mode type id rest <<<"${entry}"
+    [ "${rest}" = "${path}" ] || die "Followed file '${path}': unexpected base entry '${entry}'."
+    case "${mode}:${type}" in
+      100644:blob | 100755:blob)
+        [ -f "${REPO_DIR}/${path}" ] && [ ! -L "${REPO_DIR}/${path}" ] &&
+          [ "$(git_safe hash-object --no-filters -- "${path}")" = "${id}" ] ||
+          die "Followed file '${path}' is not its base version in the checkout: the reset missed it."
+        ;;
+      120000:blob)
+        [ -L "${REPO_DIR}/${path}" ] && [ "$(readlink -- "${REPO_DIR}/${path}")" = "$(git_safe cat-file blob "${id}")" ] ||
+          die "Followed file '${path}' is not its base version in the checkout: the reset missed it."
+        ;;
+      *) die "Followed file '${path}' is not a file in the base commit (mode ${mode})." ;;
+    esac
+  done
+  echo "run-review: ${#RULE_FILES[@]} rule file(s) and ${#ADDENDUM_NAMED[@]} file(s) named by the addendum are their base versions."
+}
 
 fetch_phase() {
   rm -rf "${REPO_DIR}" "${PROMPT_FILE}" "${HARNESS_OUT}" "${RESULT_DIR}" "${SCRATCH_HOME}" "${SCRATCH_TMP}"
@@ -249,6 +306,7 @@ fetch_phase() {
   if [ "${#BASE_PATHS[@]}" -gt 0 ]; then
     git_safe --literal-pathspecs checkout -q "${BASE_SHA}" -- "${BASE_PATHS[@]}"
   fi
+  verify_followed_files
 
   # --- Render the prompt -------------------------------------------------------
   PR_TITLE=$(jq -r '.title // "" | tostring' "${IN_DIR}/pr.json" | tr -d '\r' | head -n 1 | clip "${PR_TITLE_MAX_BYTES}")

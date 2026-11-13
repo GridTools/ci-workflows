@@ -49,7 +49,8 @@ test_reviews_pr_and_resets_instruction_files() {
     assert "no placeholder left outside the PR text" test "$(grep -c '{{' ws/prompt.md)" -eq 2 &&
     assert "project named" grep -qF 'pull request to GT4Py.' ws/prompt.md &&
     assert "rule files listed" grep -qF '2. `CODING_GUIDELINES.md`, if it exists.' ws/prompt.md &&
-    assert "addendum included" grep -qF 'Test addendum' ws/prompt.md
+    assert "addendum included" grep -qF 'Test addendum' ws/prompt.md &&
+    assert "post-condition checked" grep -q "2 rule file(s) and 1 file(s) named by the addendum are their base versions" log
 }
 
 test_truncates_oversized_review() {
@@ -84,6 +85,50 @@ test_removes_instruction_files_added_by_the_pr() {
       return 1
   done
   assert "unrelated file kept" test -f "${repo}/.gitignore"
+}
+
+# The reset's post-condition (security review S4). Commit 64c83aa0 adds
+# src/gt4py/next/AGENTS.md, which its parent lacks. The central list is
+# narrowed in the test's trusted root so that only the caller's patterns
+# decide.
+REAL_HEAD=64c83aa07ab0e2c00b385faccb8b4ca57945829a
+REAL_BASE=b84a46734f164516a4c28c486e4e4b71dd2eb2d8
+setup_followed() { # extra-pattern
+  setup 0 "${REAL_HEAD}" "${REAL_BASE}"
+  printf 'CLAUDE.md\n' >root/instruction-files.txt
+  printf 'CODING_GUIDELINES.md\n' >root/config/rule-files.txt
+  printf '%s\n' "$1" >root/config/extra-instruction-files.txt
+  printf 'Also follow `src/gt4py/next/AGENTS.md`.\n' >root/config/prompt-addendum.md
+}
+
+test_post_condition_catches_a_pattern_that_misses_the_file() {
+  # Bash matching says 'gt4py/*.md' covers src/gt4py/next/AGENTS.md ('*'
+  # crosses '/'), git's ':(glob)' does not, so the reset keeps the PR's
+  # file: the post-condition must stop the run before the prompt exists.
+  setup_followed 'gt4py/*.md'
+  ! bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 &&
+    assert "names the file" grep -q "Followed file 'src/gt4py/next/AGENTS.md' is not in the base commit but is in the checkout" log &&
+    assert "no prompt" test ! -e ws/prompt.md
+}
+
+test_post_condition_passes_when_the_pattern_matches() {
+  # Positive control: 'next/*.md' matches at that depth, so the PR's file is
+  # removed (the base has none).
+  setup_followed 'next/*.md'
+  bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  assert "file removed" test ! -e ws/repo/src/gt4py/next/AGENTS.md &&
+    assert "PR version kept as data" test -s ws/repo/.agent-review-context/pr-instruction-files/src/gt4py/next/AGENTS.md.txt &&
+    assert "checked" grep -q "1 rule file(s) and 1 file(s) named by the addendum are their base versions" log
+}
+
+test_rule_file_added_only_by_the_pr() {
+  # A rule file the base lacks: absent in both after the reset.
+  setup 0 "${REAL_HEAD}" "${REAL_BASE}"
+  printf 'src/gt4py/next/AGENTS.md\n' >root/config/rule-files.txt
+  : >root/config/prompt-addendum.md
+  bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  assert "file removed" test ! -e ws/repo/src/gt4py/next/AGENTS.md &&
+    assert "checked" grep -q "1 rule file(s) and 0 file(s) named by the addendum are their base versions" log
 }
 
 test_review_phase_runs_offline_after_fetch() {
