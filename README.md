@@ -4,7 +4,8 @@ Reusable GitHub Actions workflows shared by GridTools projects and their
 partners (for example GT4Py and icon4py).
 
 **Status: pre-release.** Nothing here is released yet. Do not call these
-workflows from production repositories until a `v1.0.0` tag exists.
+workflows with a real key until the first release tag (`v0.1.0`) exists; see
+the agent review's [release checklist](docs/agent-review.md#release-checklist).
 
 ## Workflows
 
@@ -18,8 +19,9 @@ design history.
 
 ## Using a workflow
 
-Call a workflow from your repository pinned by **full commit SHA**, with the
-release tag as a comment, and let Dependabot propose updates:
+Call a workflow from your repository pinned by the **full commit SHA** of a
+release tag on `main`, with the tag as a comment, and let Dependabot propose
+updates:
 
 ```yaml
 jobs:
@@ -28,7 +30,15 @@ jobs:
 ```
 
 Never call a branch (`@main`) or a moving tag: a change here would reach your
-repository unreviewed.
+repository unreviewed. Check every new pin, including Dependabot's, before
+merging it: a commit that exists only in a fork resolves through this
+repository's name too.
+
+```bash
+gh api repos/GridTools/ci-workflows/compare/main...<sha> --jq .status  # 'identical' or 'behind'
+```
+
+zizmor's `impostor-commit` audit does the same check.
 
 ### Adopter checklist
 

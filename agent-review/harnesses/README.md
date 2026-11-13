@@ -12,9 +12,11 @@ the pull request or the calling repository.
 | `wire`       | One line: `openai-chat` or `none`. `openai-chat` passes the key to AWF as `OPENAI_API_KEY`; every harness uses AWF's OpenAI listener, `$AWF_API_PROXY_OPENAI_URL` (an origin): clients that append only `/chat/completions` (opencode, Pi) need `$AWF_API_PROXY_OPENAI_URL/v1`. There is no `anthropic-messages` wire: with `ANTHROPIC_API_KEY`, AWF v0.29.12 opens an Anthropic listener whose `POST /messages` is not counted by `maxTurns`, and its entrypoint fails under `filesystem.allowWrite`. An Anthropic-API client can use the OpenAI listener, which forwards `/v1/messages` with a Bearer token (CSCS accepts it).                                                                                                                                                                                                                                                                                                                                                       |
 | `README.md`  | Pinned version, how to upgrade it, the paths it reads as instructions or configuration (add them to `../instruction-files.txt`), and any outbound calls it tries to make.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
-The harness name must also be added to the `case` in the `Authorize` step of
-`.github/workflows/agent-review.yml` (and, by callers that offer it, to their
-`workflow_dispatch` choice).
+The harness name must also be added to the harness allowlist in
+`agent-review/bin/authorize`, as keyed (`wire` `openai-chat`: it runs in the
+`review` job, with the caller's environment and key) or keyless (`wire`
+`none`: the `review-keyless` job); both jobs check that the `wire` agrees.
+Callers that offer it add it to their `workflow_dispatch` choice.
 
 Recommended: `opencode` with `zai-org/GLM-5.3-Flash`, `pi` as the alternative.
 
