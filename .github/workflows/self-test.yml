@@ -1,0 +1,104 @@
+name: Self-test
+
+# This repository's own CI: lint, the agent review's script tests, and the
+# whole agent review pipeline end to end with the 'stub' harness (no key, no
+# model call, nothing posted) through a LOCAL call, so the commit under test
+# is exactly the one whose files the pipeline fetches. The fixed fixture is a
+# merged public GT4Py pull request whose head is in a fork and which changes
+# AGENTS.md, so the cross-repository fetch by sha and the instruction-file
+# reset run for real.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, to notice drift in the runner image, AWF or the fixture.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FIXTURE_REPO: GridTools/gt4py
+  FIXTURE_PR: "2983"
+  FIXTURE_HEAD_SHA: 46e9c4f3cecc6571b36b219994f8b126602513ff
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # actionlint, shellcheck and file checks, hooks pinned by commit sha.
+      - name: pre-commit
+        run: pipx run pre-commit==4.7.0 run --all-files --show-diff-on-failure
+
+  scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # 'test-run-review' needs github.com (it fetches the fixture); the
+      # others are offline.
+      - name: Script tests
+        run: |
+          rc=0
+          for t in test-collect-result test-publish-comment test-instruction-coverage test-run-review; do
+            echo "::group::${t}"
+            bash "agent-review/tests/${t}.sh" || rc=1
+            echo "::endgroup::"
+          done
+          exit "${rc}"
+
+  e2e:
+    uses: ./.github/workflows/agent-review.yml
+    # The ceiling for the called jobs, as in a real caller.
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      harness: stub
+      pr: "2983"
+      test_repository: GridTools/gt4py
+      dry_run: true
+      environment: agent-review-selftest
+      project_name: GT4Py
+      rule_files: |
+        .github/copilot-instructions.md
+        AGENTS.md
+        CODING_GUIDELINES.md
+        src/gt4py/next/AGENTS.md
+      prompt_addendum: .github/agent-review-selftest/prompt-addendum.md
+      # Lowered caps, to exercise the clamping.
+      requests_per_hour: 10
+      max_turns: 5
+      harness_timeout_minutes: 5
+
+  check:
+    needs: e2e
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: The stub review of the fixture was rendered
+        env:
+          E2E: ${{ needs.e2e.result }}
+          RESULT: ${{ needs.e2e.outputs.result }}
+          HEAD_SHA: ${{ needs.e2e.outputs.head_sha }}
+        run: |
+          echo "e2e='${E2E}' result='${RESULT}' head_sha='${HEAD_SHA}'"
+          [ "${E2E}" = success ] && [ "${RESULT}" = dry-run ] && [ "${HEAD_SHA}" = "${FIXTURE_HEAD_SHA}" ]

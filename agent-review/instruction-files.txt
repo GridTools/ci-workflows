@@ -16,10 +16,13 @@
 # This is the union over all harnesses: extend it when adding an adapter
 # (see harnesses/README.md).
 
-# Shared conventions. These are the files 'prompt.md.tmpl' tells the agent to
-# follow as rules/conventions, so the PR must not be able to rewrite them;
-# keep this list and the prompt's "Review rules" section in sync (there is a
-# regression test, tests/test-instruction-coverage.sh).
+# The caller adds its own patterns ('instruction_files' input), and every
+# file it lists in 'rule_files' (which the prompt tells the agent to follow)
+# is reset as well, by construction. Files named in the caller's prompt
+# addendum must be covered by one of these, or 'run-review' fails closed
+# (tests/test-instruction-coverage.sh).
+#
+# Shared conventions.
 AGENTS.md
 AGENTS.override.md
 # Named by the trusted AGENTS.md as a per-machine override; ignored by
@@ -27,7 +30,6 @@ AGENTS.override.md
 AGENTS.local.md
 CLAUDE.md
 CLAUDE.local.md
-CODING_GUIDELINES.md
 .github/copilot-instructions.md
 .claude/
 .mcp.json

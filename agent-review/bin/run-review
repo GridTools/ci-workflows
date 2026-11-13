@@ -3,7 +3,7 @@
 #
 # Usage: run-review [--phase fetch|review|all] <workspace>
 #
-# Runs INSIDE the AWF sandbox (see docs/development/tools/agent-review.md),
+# Runs INSIDE the AWF sandbox (see docs/agent-review.md),
 # in two sandbox runs, so that the agent never has network access:
 #   fetch   fetches the PR from github.com (the only allowed domain), with
 #           every object it needs, prepares the checkout and renders the
@@ -75,6 +75,8 @@ HARNESS=$(param harness)
 MODEL=$(param model)
 HARNESS_TIMEOUT_MINUTES=$(param harness_timeout_minutes)
 STUB_PADDING_KIB=$(jq -r '.stub_padding_kib // 0 | tostring' "${IN_DIR}/params.json")
+PROJECT=$(jq -r '.project // "" | tostring' "${IN_DIR}/params.json")
+[ -n "${PROJECT}" ] || PROJECT=${REPO#*/}
 
 # Validated in the 'authorize' job already; checked again because these become
 # paths, URLs and command arguments.
@@ -86,6 +88,53 @@ STUB_PADDING_KIB=$(jq -r '.stub_padding_kib // 0 | tostring' "${IN_DIR}/params.j
 [[ "${MODEL}" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]] || die "Invalid model '${MODEL}'."
 [[ "${HARNESS_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]{0,2}$ ]] || die "Invalid timeout '${HARNESS_TIMEOUT_MINUTES}'."
 [[ "${STUB_PADDING_KIB}" =~ ^[0-9]{1,5}$ ]] || die "Invalid stub padding '${STUB_PADDING_KIB}'."
+[[ "${PROJECT}" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,63}$ ]] || die "Invalid project '${PROJECT}'."
+
+# Caller configuration (trusted: the caller's validated inputs and its
+# addendum file at the caller's workflow commit), next to this script's own
+# files. Missing files mean "not configured".
+CONFIG_DIR="${TRUSTED_ROOT}/config"
+read_list() { # file -> non-comment, trimmed lines on stdout
+  [ -f "$1" ] || return 0
+  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" | grep -v -e '^$' -e '^#' || true
+}
+check_entry() { # entry
+  case "$1" in /* | :* | *..*) die "Invalid configured path or pattern: '$1'." ;; esac
+}
+mapfile -t RULE_FILES < <(read_list "${CONFIG_DIR}/rule-files.txt")
+for f in "${RULE_FILES[@]}"; do check_entry "${f}"; done
+# Reset patterns: the central list (every harness's files), the caller's
+# extra patterns, and every rule file the prompt tells the agent to follow.
+mapfile -t RESET_PATTERNS < <(
+  read_list "${TRUSTED_ROOT}/instruction-files.txt"
+  read_list "${CONFIG_DIR}/extra-instruction-files.txt"
+  printf '%s\n' "${RULE_FILES[@]}"
+)
+for f in "${RESET_PATTERNS[@]}"; do [ -z "${f}" ] || check_entry "${f}"; done
+
+# True if repository path $1 is reset by some pattern (same semantics as the
+# pathspecs below: 'E' matches E at any depth, 'D/' anything under D).
+covered() {
+  local path=$1 entry
+  for entry in "${RESET_PATTERNS[@]}"; do
+    [ -n "${entry}" ] || continue
+    if [[ "${entry}" == */ ]]; then
+      case "/${path}/" in */"${entry%/}"/*) return 0 ;; esac
+    else
+      # shellcheck disable=SC2053,SC2254 # entries may be globs
+      [[ "${path}" == ${entry} || "${path}" == */${entry} ]] && return 0
+    fi
+  done
+  return 1
+}
+# Fail closed: a file the addendum names as a rule must be reset too, or a PR
+# could rewrite it and have the agent follow the PR's version.
+ADDENDUM_FILE="${CONFIG_DIR}/prompt-addendum.md"
+if [ -s "${ADDENDUM_FILE}" ]; then
+  while IFS= read -r named; do
+    covered "${named}" || die "The prompt addendum names '${named}', which no reset pattern covers; add it to rule_files."
+  done < <(grep -oE '`[^`[:space:]]+\.(md|mdc|txt|toml|ya?ml|json|jsonc)`' "${ADDENDUM_FILE}" | tr -d '`' | sort -u)
+fi
 
 ADAPTER_DIR="${TRUSTED_ROOT}/harnesses/${HARNESS}"
 HARNESS_PREFIX="${TRUSTED_ROOT}/harness/${HARNESS}"
@@ -164,15 +213,14 @@ fetch_phase() {
   # Every pattern applies at any depth (see instruction-files.txt), and
   # case-insensitively, since a harness may not care about case either.
   SPECS=()
-  while IFS= read -r pattern; do
+  for pattern in "${RESET_PATTERNS[@]}"; do
     case "${pattern}" in
-      '' | '#'*) continue ;;
-      /* | :* | *..*) die "Invalid pattern in instruction-files.txt: '${pattern}'." ;;
+      '') continue ;;
       */) SPECS+=(":(glob,icase)**/${pattern}**") ;;
       *) SPECS+=(":(glob,icase)**/${pattern}") ;;
     esac
-  done < <(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "${TRUSTED_ROOT}/instruction-files.txt")
-  [ "${#SPECS[@]}" -gt 0 ] || die "No entries in instruction-files.txt."
+  done
+  [ "${#SPECS[@]}" -gt 0 ] || die "No reset patterns."
   # 'ls-files', not 'ls-tree', which rejects the ':(glob)' magic. The index
   # holds the head tree after the checkout; the base tree goes into a scratch
   # index. Listed into files so a git failure stops the run (set -e).
@@ -210,7 +258,22 @@ fetch_phase() {
   PR_TITLE=${PR_TITLE//"${NONCE}"/}
   PR_BODY=${PR_BODY//"${NONCE}"/}
 
+  if [ "${#RULE_FILES[@]}" -gt 0 ]; then
+    RULES=$(i=0; for f in "${RULE_FILES[@]}"; do i=$((i + 1)); printf '%d. `%s`, if it exists.\n' "${i}" "${f}"; done)
+  else
+    RULES="No project rule files are configured."
+  fi
+  ADDENDUM=""
+  if [ -s "${ADDENDUM_FILE}" ]; then
+    ADDENDUM=$(printf '### Project notes\n\n%s\n' "$(clip 8192 <"${ADDENDUM_FILE}")")
+  fi
+
   prompt=$(<"${TRUSTED_ROOT}/prompt.md.tmpl")
+  # Trusted caller text first, so that placeholders inside it are expanded
+  # like the template's own; untrusted values last.
+  prompt=${prompt//"{{ADDENDUM}}"/"${ADDENDUM}"}
+  prompt=${prompt//"{{RULES}}"/"${RULES}"}
+  prompt=${prompt//"{{PROJECT}}"/"${PROJECT}"}
   prompt=${prompt//"{{REPO}}"/"${REPO}"}
   prompt=${prompt//"{{PR_NUMBER}}"/"${PR_NUMBER}"}
   prompt=${prompt//"{{HEAD_SHA}}"/"${HEAD_SHA}"}

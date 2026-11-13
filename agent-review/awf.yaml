@@ -1,10 +1,12 @@
 # AWF (github/gh-aw-firewall) configuration for the agent review sandbox.
 # Schema: https://github.com/github/gh-aw-firewall (docs/awf-config-spec.md).
 #
-# Read from the workflow's own commit, never from the PR. The 'review' job
-# renders it to JSON and sets 'apiProxy.allowedModels' to the configured model
-# (repository variable AGENT_REVIEW_MODEL) and 'filesystem.allowWrite' to the
-# review workspace; host paths (--audit-dir, --proxy-logs-dir,
+# Read from the reusable workflow's own commit, never from the PR or the
+# caller. The 'review' job renders it to JSON and sets 'apiProxy.allowedModels'
+# to the configured model (the caller's 'model' input) and
+# 'filesystem.allowWrite' to the review workspace. The rate limits, 'maxTurns'
+# and 'agentTimeout' below are CEILINGS: the caller's inputs can only lower
+# them (the job takes the minimum); host paths (--audit-dir, --proxy-logs-dir,
 # --container-workdir) and image digests (--image-tag) are passed as
 # command-line flags.
 #

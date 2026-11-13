@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Guards invariant 5: every file 'prompt.md.tmpl' tells the agent to FOLLOW as
-# rules or conventions must also be reset to its base version before the run,
-# i.e. be covered by a pattern in 'instruction-files.txt'. Otherwise a PR can
-# edit that file and have the agent obey the PR's version (finding F1, Phase 2:
-# 'CODING_GUIDELINES.md' was named by the prompt but not reset).
+# Guards the reset invariant in the reusable form: every file the prompt tells
+# the agent to FOLLOW must be reset to its base version before the run. Rule
+# files come from the caller ('rule_files') and are reset by construction;
+# files named in the caller's prompt addendum must be covered by some reset
+# pattern, or run-review fails closed before touching the PR.
 #
 # Offline, no network. Run: bash tests/test-instruction-coverage.sh
 
@@ -12,55 +12,52 @@ set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
 AR_DIR=$(cd "$(dirname "$0")/.." && pwd)
-PROMPT="${AR_DIR}/prompt.md.tmpl"
-LIST="${AR_DIR}/instruction-files.txt"
 
-# The instruction files the prompt names in its "Review rules" section are
-# extracted FROM the prompt (not hardcoded), so a rule file added to the prompt
-# later cannot slip past this check. Take every backticked path ending in '.md'
-# between '## Review rules' and the next '## ' heading.
-mapfile -t REQUIRED < <(
-  awk '/^## Review rules/{f=1; next} f && /^## /{exit} f' "${PROMPT}" |
-    grep -oE '`[^`]+\.md`' | tr -d '`' | sort -u
-)
-
-# True if path $1 is reset by some pattern in instruction-files.txt, matching
-# run-review's logic: a plain entry 'E' becomes ':(glob)**/E' (E at any depth,
-# by trailing path segment); an entry 'D/' becomes ':(glob)**/D/**' (anything
-# under a directory named D at any depth).
-covered() {
-  local path=$1 entry
-  while IFS= read -r entry; do
-    entry=${entry#"${entry%%[![:space:]]*}"} # ltrim
-    entry=${entry%"${entry##*[![:space:]]}"} # rtrim
-    case "${entry}" in '' | '#'*) continue ;; esac
-    if [[ "${entry}" == */ ]]; then
-      local dir=${entry%/}
-      case "/${path}/" in */"${dir}"/*) return 0 ;; esac
-    else
-      [ "${path}" = "${entry}" ] && return 0
-      case "${path}" in */"${entry}") return 0 ;; esac
-    fi
-  done <"${LIST}"
-  return 1
+setup() { # rule-files addendum [extra-patterns]
+  mkdir -p root/config ws/in
+  cp -r "${AR_DIR}/bin" "${AR_DIR}/harnesses" "${AR_DIR}/prompt.md.tmpl" "${AR_DIR}/instruction-files.txt" root/
+  bash root/harnesses/stub/install.sh root/harness/stub
+  printf '%s\n' "$1" >root/config/rule-files.txt
+  printf '%s\n' "${3:-}" >root/config/extra-instruction-files.txt
+  printf '%s\n' "$2" >root/config/prompt-addendum.md
+  jq -n '{repo: "example-org/example", pr: 1, head_sha: ("a" * 40), base_sha: ("b" * 40),
+          harness: "stub", model: "none", harness_timeout_minutes: 5, project: "Example"}' >ws/in/params.json
 }
 
-test_prompt_named_files_are_reset() {
-  local f rc=0
-  assert "found the prompt's named rule files" test "${#REQUIRED[@]}" -ge 3 || rc=1
-  for f in "${REQUIRED[@]}"; do
-    echo "    rule file from prompt: ${f}"
-    assert "'${f}' reset by instruction-files.txt" covered "${f}" || rc=1
-  done
-  return "${rc}"
+test_addendum_naming_a_rule_file_passes() {
+  setup $'AGENTS.md\nCODING_GUIDELINES.md' 'Also follow `CODING_GUIDELINES.md` and `src/pkg/AGENTS.md`.'
+  # Passes the coverage check, then stops because no fetch phase ran.
+  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+    assert "got past the coverage check" grep -q "run the fetch phase first" log
 }
 
-# A plain source file is reviewed as data, not reset. This checks 'covered'
-# does not match everything (which would make the test above vacuous).
-test_plain_repo_file_is_not_falsely_required() {
-  ! covered src/gt4py/next/common.py
+test_addendum_naming_an_unreset_file_fails_closed() {
+  setup 'AGENTS.md' 'Follow `docs/style.md` for naming.'
+  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+    assert "names the uncovered file" grep -q "names 'docs/style.md', which no reset pattern covers" log
 }
 
-run_test test_prompt_named_files_are_reset
-run_test test_plain_repo_file_is_not_falsely_required
+test_addendum_naming_a_file_covered_by_extra_patterns_passes() {
+  setup 'AGENTS.md' 'Follow `docs/style/naming.md`.' 'docs/style/'
+  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+    assert "got past the coverage check" grep -q "run the fetch phase first" log
+}
+
+test_addendum_naming_a_central_instruction_file_passes() {
+  setup '' 'Read `.github/copilot-instructions.md` first.'
+  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+    assert "got past the coverage check" grep -q "run the fetch phase first" log
+}
+
+test_invalid_rule_file_is_rejected() {
+  setup '../etc/passwd' ''
+  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+    assert "rejects the entry" grep -q "Invalid configured path or pattern" log
+}
+
+run_test test_addendum_naming_a_rule_file_passes
+run_test test_addendum_naming_an_unreset_file_fails_closed
+run_test test_addendum_naming_a_file_covered_by_extra_patterns_passes
+run_test test_addendum_naming_a_central_instruction_file_passes
+run_test test_invalid_rule_file_is_rejected
 summary

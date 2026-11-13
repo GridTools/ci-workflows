@@ -5,11 +5,13 @@
 - **Created**: 2026-11-13
 - **Updated**: 2026-11-13
 
+> Imported from GridTools/gt4py (`docs/development/ADRs/ci/0001-sandboxed-agent-pr-review.md`, draft PR 2985), where it was written for an in-repository workflow. Only links were changed. Packaging it as a reusable workflow, and what that changes, is [ADR 0002](0002-reusable-workflow.md).
+
 Why-statement: In the context of advisory AI review of pull requests, including PRs from forks, facing the need to let a tool-using coding agent explore untrusted PR content next to an inference credential, we decided to run the agent inside the AWF sandbox from a `pull_request_target` workflow split into four jobs, with the harness as a pluggable adapter, to achieve reviews that can read the whole repository while no secret is readable by the agent or by PR code. We considered running the agent directly on the runner, a `pull_request`-only workflow, and an external proxy with OIDC token exchange, and accept that a sandbox escape would expose a low-budget key, that an injected agent can spend that key's budget, and that prompt injection can still steer the review's text.
 
 ## Context
 
-[PR Agent](../../tools/pr-agent.md) reviews a PR from its diff, fetched through the API, with a single model call; it never sees the rest of the repository. A coding agent (opencode, Pi, ...) can read related code, run `git log` and follow call sites, which is what a useful review of GT4Py needs. Such an agent executes tools on attacker-controlled content, so a prompt injection in a PR could make it read or send anything it can reach.
+[PR Agent](https://github.com/GridTools/gt4py/blob/main/docs/development/tools/pr-agent.md) reviews a PR from its diff, fetched through the API, with a single model call; it never sees the rest of the repository. A coding agent (opencode, Pi, ...) can read related code, run `git log` and follow call sites, which is what a useful review of GT4Py needs. Such an agent executes tools on attacker-controlled content, so a prompt injection in a PR could make it read or send anything it can reach.
 
 - Most GT4Py PRs come from forks, which get no secrets under `pull_request`; the inference key therefore requires `pull_request_target`, which runs with secrets.
 - The CSCS inference key is billed against the project's allocation; a write-capable token could alter the repository.
@@ -19,14 +21,14 @@ Why-statement: In the context of advisory AI review of pull requests, including 
 
 ## Decision
 
-We run the agent inside [AWF](https://github.com/github/gh-aw-firewall) (agentic workflow firewall): a container sandbox with a domain allowlist and an API-proxy sidecar that holds the real key and gives the agent placeholders. The PR is fetched in a first, keyless sandbox run that allows only `github.com` (and its subdomains) and runs no agent; the agent then runs with no allowed domain, reaching only the API proxy (and, without a key, the inference host). The workflow ([`agent-review.yml`](../../../../.github/workflows/agent-review.yml)) has four jobs, so that each secret lives where no untrusted code runs:
+We run the agent inside [AWF](https://github.com/github/gh-aw-firewall) (agentic workflow firewall): a container sandbox with a domain allowlist and an API-proxy sidecar that holds the real key and gives the agent placeholders. The PR is fetched in a first, keyless sandbox run that allows only `github.com` (and its subdomains) and runs no agent; the agent then runs with no allowed domain, reaching only the API proxy (and, without a key, the inference host). The workflow ([`agent-review.yml`](../../.github/workflows/agent-review.yml)) has four jobs, so that each secret lives where no untrusted code runs:
 
 1. `authorize` checks that the PR author (automatic runs) or the labeller (`agent-review` label) has write access, fails closed, and pins the head sha.
 2. `prepare` downloads the pinned harness without any secret and runs none of its code (no install scripts, no version check), since the job has sudo and a cache-capable token.
 3. `review` passes the key only to the `awf` step that runs the agent, from a GitHub environment restricted to the default branch. The host never handles PR content: the PR is fetched by git inside the sandbox, the sandbox can write only to the review workspace, and the host is still treated as tainted after `awf` returns. Only two small regular files leave the job, after the sandbox's containers are removed.
 4. `publish` posts the comment from a fresh VM with a write token, no model and no PR code, and sanitises the review (mentions, markup that renders as nothing, invisible characters, size) in a step without a token.
 
-The prompt, AWF configuration and harness come from the workflow's own commit, and the agent instruction files from the PR's base commit, never from the PR. The harness is an adapter with a small contract (`install.sh`, `run.sh`, `wire`) and is selected by a repository variable, one per run. Details and the invariants to keep are in [agent-review.md](../../tools/agent-review.md).
+The prompt, AWF configuration and harness come from the workflow's own commit, and the agent instruction files from the PR's base commit, never from the PR. The harness is an adapter with a small contract (`install.sh`, `run.sh`, `wire`) and is selected by a repository variable, one per run. Details and the invariants to keep are in [agent-review.md](../agent-review.md).
 
 We chose AWF because it is the only option that provides credential isolation, egress control and per-run request limits together, maintained and used by GitHub's own agentic workflows, without infrastructure of our own.
 
@@ -65,6 +67,6 @@ We chose AWF because it is the only option that provides credential isolation, e
 
 ## References
 
-- [agent-review.md](../../tools/agent-review.md): usage, invariants, configuration, adapter contract.
-- [pr-agent.md](../../tools/pr-agent.md): the existing diff-based reviewer.
+- [agent-review.md](../agent-review.md): usage, invariants, configuration, adapter contract.
+- [pr-agent.md](https://github.com/GridTools/gt4py/blob/main/docs/development/tools/pr-agent.md): GT4Py's diff-based reviewer.
 - [AWF documentation](https://github.com/github/gh-aw-firewall)

@@ -10,7 +10,7 @@ workflows from production repositories until a `v1.0.0` tag exists.
 
 | Workflow | Purpose | Docs |
 | --- | --- | --- |
-| *(in progress)* `agent-review.yml` | Advisory pull request review by a coding agent running in a network-restricted sandbox | – |
+| [`agent-review.yml`](.github/workflows/agent-review.yml) | Advisory pull request review by a coding agent running in a network-restricted sandbox (AWF) | [docs/agent-review.md](docs/agent-review.md) |
 
 The agent review was designed and security-reviewed in GT4Py first; see
 [GridTools/gt4py#2985](https://github.com/GridTools/gt4py/pull/2985) for the
@@ -32,7 +32,8 @@ repository unreviewed.
 
 ### Adopter checklist
 
-*To be written with the first release.*
+For the agent review: see
+[Required settings in the calling repository](docs/agent-review.md#required-settings-in-the-calling-repository).
 
 ## Contributing
 
