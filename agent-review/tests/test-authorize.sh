@@ -15,6 +15,8 @@ CALLER=example-org/example
 CSCS=https://api.inference.cscs.ch/v1
 HEAD=$(printf 'a%.0s' {1..40})
 BASE=$(printf 'b%.0s' {1..40})
+WF_SHA=$(printf 'c%.0s' {1..40})
+CALLER_SHA=$(printf 'd%.0s' {1..40})
 
 # A valid 'workflow_dispatch' of a keyed harness from a caller; tests change
 # what they need.
@@ -39,7 +41,7 @@ EOF
   export IN_LABEL=agent-review IN_PROJECT='' IN_RULES=$'AGENTS.md\nCODING_GUIDELINES.md'
   export IN_PATTERNS='' IN_ADDENDUM=.github/agent-review/prompt-addendum.md IN_API_BASE=${CSCS}
   export IN_RPH=100 IN_RPM=30 IN_TURNS=80 IN_TIMEOUT=20 IN_ENVIRONMENT=agent-review IN_TEST_REPO=''
-  export TRUSTED_REPO=${CENTRAL} TRUSTED_SHA=$(printf 'c%.0s' {1..40}) CALLER_WF_SHA=$(printf 'd%.0s' {1..40})
+  export TRUSTED_REPO=${CENTRAL} TRUSTED_SHA=${WF_SHA} CALLER_WF_SHA=${CALLER_SHA}
   export HAS_SHARED_KEY=false
 }
 # A 'pull_request_target' event of a caller.

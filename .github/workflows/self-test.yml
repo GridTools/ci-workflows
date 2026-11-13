@@ -190,7 +190,7 @@ jobs:
           done
           log="${RUNNER_TEMP}/review.log"
           expect "fetch run allows only github.com" grep -qE '^[^ ]+ awf\| \[INFO\] Allowed domains: github\.com$' "${log}"
-          expect "review run allows no domain" grep -qE '^[^ ]+ awf\| \[INFO\] Allowed domains:$' "${log}"
+          expect "review run allows no domain" grep -qE '^[^ ]+ awf\| \[INFO\] Allowed domains: ?$' "${log}"
           expect "caps clamped" grep -qF '{"rateLimiting":{"requestsPerMinute":30,"requestsPerHour":10},"maxTurns":5,"agentTimeout":10}' "${log}"
           expect "no key reached AWF" test "$(grep -c 'API proxy enabled: OpenAI=true' "${log}")" -eq 0
           expect "the reset was verified" grep -qF 'are their base versions.' "${log}"
