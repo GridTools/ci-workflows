@@ -1,9 +1,10 @@
 name: Self-test
 
-# This repository's own CI: lint, the agent review's script tests, and the
-# whole agent review pipeline end to end with the 'stub' harness (no key, no
-# model call, nothing posted) through a LOCAL call, so the commit under test
-# is exactly the one whose files the pipeline fetches. The fixed fixture is a
+# This repository's own CI: lint, zizmor, the agent review's script and
+# structure tests, and the whole agent review pipeline end to end with the
+# 'stub' harness (the keyless job: no environment, no key, no model call,
+# nothing posted) through a LOCAL call, so the commit under test is exactly
+# the one whose files the pipeline fetches. The fixed fixture is a
 # merged public GT4Py pull request whose head is in a fork and which changes
 # AGENTS.md, so the cross-repository fetch by sha and the instruction-file
 # reset run for real.
@@ -41,6 +42,22 @@ jobs:
       - name: pre-commit
         run: pipx run pre-commit==4.7.0 run --all-files --show-diff-on-failure
 
+  # Static security audit of the workflows. Online audits (impostor commits,
+  # known-vulnerable actions, ref confusion) use the read-only token.
+  zizmor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pipx run zizmor==1.32.0 --format plain .github/workflows
+
   scripts:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -55,12 +72,16 @@ jobs:
       - name: Script tests
         run: |
           rc=0
-          for t in test-collect-result test-publish-comment test-instruction-coverage test-run-review; do
+          for t in test-authorize test-collect-result test-publish-comment test-instruction-coverage test-run-review; do
             echo "::group::${t}"
             bash "agent-review/tests/${t}.sh" || rc=1
             echo "::endgroup::"
           done
           exit "${rc}"
+      # The workflow's structural invariants (environment, secrets,
+      # permissions, expressions in scripts, the keyless twin).
+      - name: Workflow structure
+        run: python3 agent-review/tests/test-workflow-structure.py
 
   # The model-calling adapters' installers, as the 'prepare' job runs them:
   # pinned versions with integrity checks, no install scripts, no harness
@@ -89,8 +110,11 @@ jobs:
           [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$ ]]
           [ "$(head -n 1 "agent-review/harnesses/${HARNESS}/wire")" = openai-chat ]
 
+  # The stub runs in the keyless job: no environment is requested, so no
+  # deployment is recorded and the commit needs no deployment rule. '$/' would
+  # do the same; './' keeps the call readable for older tooling.
   e2e:
-    uses: ./.github/workflows/agent-review.yml
+    uses: ./.github/workflows/agent-review.yml # zizmor: ignore[self-repository]
     # The ceiling for the called jobs, as in a real caller.
     permissions:
       contents: read
@@ -100,7 +124,6 @@ jobs:
       pr: "2983"
       test_repository: GridTools/gt4py
       dry_run: true
-      environment: agent-review-selftest
       project_name: GT4Py
       rule_files: |
         .github/copilot-instructions.md
@@ -117,14 +140,62 @@ jobs:
     needs: e2e
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    permissions: {}
+    timeout-minutes: 5
+    # Reads this run's jobs and the keyless review's log, and the commit's
+    # deployments; nothing is written.
+    permissions:
+      actions: read
+      deployments: read
     steps:
-      - name: The stub review of the fixture was rendered
+      - name: The stub review of the fixture was rendered, not posted
         env:
           E2E: ${{ needs.e2e.result }}
           RESULT: ${{ needs.e2e.outputs.result }}
           HEAD_SHA: ${{ needs.e2e.outputs.head_sha }}
+          COMMENT_URL: ${{ needs.e2e.outputs.comment_url }}
         run: |
-          echo "e2e='${E2E}' result='${RESULT}' head_sha='${HEAD_SHA}'"
-          [ "${E2E}" = success ] && [ "${RESULT}" = dry-run ] && [ "${HEAD_SHA}" = "${FIXTURE_HEAD_SHA}" ]
+          echo "e2e='${E2E}' result='${RESULT}' head_sha='${HEAD_SHA}' comment_url='${COMMENT_URL}'"
+          [ "${E2E}" = success ] && [ "${RESULT}" = dry-run ] && [ "${HEAD_SHA}" = "${FIXTURE_HEAD_SHA}" ] && [ -z "${COMMENT_URL}" ]
+
+      - name: The keyless job ran the sandbox as configured
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+          # Deployments record the PR head, not the merge commit.
+          COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ok=true
+          expect() { # message command...
+            local msg=$1; shift
+            if "$@"; then echo "ok    ${msg}"; else echo "::error::FAIL  ${msg}"; ok=false; fi
+          }
+          jobs=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/attempts/${ATTEMPT}/jobs" --jq '.jobs[]' | jq -s .)
+          job() { jq -r --arg n "$1" --arg f "$2" '.[] | select(.name == $n) | .[$f]' <<< "${jobs}"; }
+          step() { jq -r --arg n "$1" --arg s "$2" '.[] | select(.name == $n) | .steps[] | select(.name == $s) | .conclusion' <<< "${jobs}"; }
+          expect "the keyed job did not run" test "$(job 'e2e / review' conclusion)" = skipped
+          expect "the keyless job succeeded" test "$(job 'e2e / review-keyless' conclusion)" = success
+          expect "nothing was posted" test "$(step 'e2e / publish' 'Publish the review')" = skipped
+
+          # The raw log, through curl: it holds escape sequences, which 'gh'
+          # refuses to print. curl drops the token on the redirect to storage.
+          id=$(job 'e2e / review-keyless' id)
+          [[ "${id}" =~ ^[0-9]+$ ]] || { echo "::error::No keyless review job."; exit 1; }
+          for i in 1 2 3 4 5; do
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/${REPO}/actions/jobs/${id}/logs" | tr -d '\r' > "${RUNNER_TEMP}/review.log" && break
+            sleep $((i * 5))
+          done
+          log="${RUNNER_TEMP}/review.log"
+          expect "fetch run allows only github.com" grep -qE '^[^ ]+ awf\| \[INFO\] Allowed domains: github\.com$' "${log}"
+          expect "review run allows no domain" grep -qE '^[^ ]+ awf\| \[INFO\] Allowed domains:$' "${log}"
+          expect "caps clamped" grep -qF '{"rateLimiting":{"requestsPerMinute":30,"requestsPerHour":10},"maxTurns":5,"agentTimeout":10}' "${log}"
+          expect "no key reached AWF" test "$(grep -c 'API proxy enabled: OpenAI=true' "${log}")" -eq 0
+          expect "the reset was verified" grep -qF 'are their base versions.' "${log}"
+
+          # The keyless job requests no environment, so no deployment.
+          n=$(gh api "repos/${REPO}/deployments?sha=${COMMIT}" --jq length)
+          expect "no deployment for ${COMMIT}" test "${n}" -eq 0
+          [ "${ok}" = true ]
