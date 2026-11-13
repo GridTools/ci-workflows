@@ -7,3 +7,10 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    # AWF is bumped by hand: its setup action's SHA and its 'version:' input
+    # (agent-review.yml, 'Set up AWF') must move together, an AWF change is
+    # breaking for callers (docs/agent-review.md, Releases), and the AWF
+    # probes must be re-run. Dependabot would bump only the SHA, and inside
+    # the routine group.
+    ignore:
+      - dependency-name: github/gh-aw-firewall
