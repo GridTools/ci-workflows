@@ -5,36 +5,46 @@ name: Agent Review (reusable)
 # adopting repository, pinned by commit SHA. See docs/agent-review.md.
 #
 # Trust boundaries, one job each:
-#   authorize  permission checks only; pins the PR head sha; validates inputs.
+#   authorize  permission checks only; pins the PR head sha; validates inputs
+#              (agent-review/bin/authorize); decides whether the run is keyed.
 #   prepare    downloads the pinned harness, without secrets; runs none of
 #              its code (no install scripts, no version check).
-#   review     two AWF sandbox runs: a keyless one fetches the PR from
-#              github.com, then the agent runs with no network access but
-#              the API proxy. The inference key is in ONE step's env and
-#              reaches only AWF's API-proxy sidecar. The host never touches
-#              PR content and is treated as tainted once 'awf' returns.
+#   review     keyed harnesses: two AWF sandbox runs: a keyless one fetches
+#              the PR from github.com, then the agent runs with no network
+#              access but the API proxy. The inference key is in ONE step's
+#              env and reaches only AWF's API-proxy sidecar. The host never
+#              touches PR content and is treated as tainted once 'awf'
+#              returns. The only job with the caller's environment.
+#   review-keyless
+#              the same steps for a harness that calls no model ('stub'):
+#              no environment and no secret, so a test needs no key and no
+#              default-branch ref.
 #   publish    fresh VM with a write token; validates the result and posts it.
 #
 # Two trusted sources, fetched separately and never from the PR:
 #   - this workflow's own files under 'agent-review/' (driver, adapters, AWF
-#     configuration, prompt), from 'job.workflow_repository' at
-#     'job.workflow_sha': the commit the caller pinned in 'uses:', so the
-#     scripts and this file always come from one commit;
+#     configuration, prompt, allowed endpoints), from
+#     'job.workflow_repository' at 'job.workflow_sha': the commit the caller
+#     pinned in 'uses:', so the scripts and this file always come from one
+#     commit;
 #   - the caller's prompt addendum, from the caller repository at the
 #     caller's 'github.workflow_sha' (the default branch under
 #     'pull_request_target'; the dispatched ref under 'workflow_dispatch',
-#     which the environment's branch rule gates).
+#     which the environment's branch rule gates for keyed runs; the PR's
+#     merge commit under 'pull_request', the caller test mode).
 #
 # The CALLER keeps: its triggers ('pull_request_target' with 'labeled', and
 # 'workflow_dispatch'), the calling job's 'permissions:' ('contents: read',
-# 'pull-requests: write'; the ceiling for every job here), 'concurrency', the
-# explicit secret mapping (never 'secrets: inherit'), the environment with
-# its default-branch-only rule and the dedicated key, the label, and an
-# Actions event policy for its own workflow file.
+# 'pull-requests: write'; the ceiling for every job here), the explicit secret
+# mapping (never 'secrets: inherit'), the environment with its
+# default-branch-only rule and the dedicated key, the label, and an Actions
+# event policy for its own workflow file. Central backstops: 'authorize'
+# accepts only the 'pull_request_target' actions it lists, and the keyed job
+# has its own concurrency group.
 #
-# Compatibility: a new permission in any job below, a new required input or
-# a raised ceiling breaks callers or widens what they agreed to; release it
-# as a breaking change.
+# Compatibility: a new permission in any job below, a new required input, a
+# raised ceiling or a new allowed endpoint breaks callers or widens what they
+# agreed to; release it as a breaking change.
 
 on:
   workflow_call:
@@ -48,7 +58,7 @@ on:
         type: string
         default: ""
       pr:
-        description: Pull request number; used for 'workflow_dispatch' (and the self-test) only
+        description: Pull request number; used for 'workflow_dispatch' and 'pull_request' (test mode) only
         type: string
         default: ""
       dry_run:
@@ -60,7 +70,7 @@ on:
         type: string
         default: agent-review
       environment:
-        description: Environment of the 'review' job; holds the inference key and must be restricted to the default branch
+        description: Environment of the keyed 'review' job; holds the inference key and must be restricted to the default branch
         type: string
         default: agent-review
       project_name:
@@ -80,7 +90,7 @@ on:
         type: string
         default: ""
       api_base:
-        description: OpenAI-compatible endpoint (https)
+        description: "Inference endpoint: exactly one of the URLs in agent-review/api-bases.txt (empty: the first)"
         type: string
         default: https://api.inference.cscs.ch/v1
       requests_per_hour:
@@ -109,7 +119,7 @@ on:
         default: ""
     secrets:
       inference_api_key:
-        description: The dedicated inference key; map it explicitly from the caller's environment secret
+        description: The dedicated inference key; map it explicitly from the caller's environment secret, never from a repository or organization secret
         required: false
     outputs:
       result:
@@ -131,9 +141,10 @@ permissions: {}
 
 jobs:
   authorize:
-    # Structural filters only; authorization happens in the 'Authorize' step.
-    # Drafts are skipped so a PR is reviewed once, when ready, unless someone
-    # asks for it with the label. Only the configured label triggers.
+    # Structural filters only, to avoid runs for unrelated events; the
+    # decision is made by 'agent-review/bin/authorize'. Drafts are skipped so
+    # a PR is reviewed once, when ready, unless someone asks for it with the
+    # label. Only the configured label triggers.
     if: >-
       github.event_name != 'pull_request_target'
       || (
@@ -151,6 +162,7 @@ jobs:
       pull-requests: read
     outputs:
       allowed: ${{ steps.auth.outputs.allowed }}
+      keyed: ${{ steps.auth.outputs.keyed }}
       pr: ${{ steps.auth.outputs.pr }}
       head_sha: ${{ steps.auth.outputs.head_sha }}
       base_sha: ${{ steps.auth.outputs.base_sha }}
@@ -158,10 +170,43 @@ jobs:
       model: ${{ steps.auth.outputs.model }}
       dry_run: ${{ steps.auth.outputs.dry_run }}
       project: ${{ steps.auth.outputs.project }}
+      api_base: ${{ steps.auth.outputs.api_base }}
       source_repo: ${{ steps.auth.outputs.source_repo }}
+      call_id: ${{ steps.auth.outputs.call_id }}
       trusted_repo: ${{ steps.auth.outputs.trusted_repo }}
       trusted_sha: ${{ steps.auth.outputs.trusted_sha }}
     steps:
+      # From this workflow's own commit, never the PR or the caller, so a PR
+      # cannot change its review policy, prompt or harness. Not
+      # 'actions/checkout': in 'review' its post step would run git in a
+      # workspace the sandbox can write ('core.fsmonitor' and the like). The
+      # caller's token can read this repository because it is public. Later
+      # jobs check that their own 'job.workflow_sha' is the one recorded
+      # here: every job of one call runs the same commit.
+      - name: Fetch trusted files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ job.workflow_repository }}
+          SHA: ${{ job.workflow_sha }}
+          OWN_REPO: ${{ job.workflow_repository }}
+          OWN_SHA: ${{ job.workflow_sha }}
+        run: &fetch-trusted-run |
+          [[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::Invalid workflow repository '${REPO}'."; exit 1; }
+          [[ "${SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid workflow sha '${SHA}'."; exit 1; }
+          if [ "${REPO}" != "${OWN_REPO}" ] || [ "${SHA}" != "${OWN_SHA}" ]; then
+            echo "::error::Workflow commit changed between jobs: '${REPO}@${SHA}' vs '${OWN_REPO}@${OWN_SHA}'."
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/trusted"
+          gh api "repos/${REPO}/tarball/${SHA}" > "${RUNNER_TEMP}/trusted.tar.gz"
+          # Only the top-level 'agent-review/' directory ('*' must not match
+          # '/', or a nested directory of that name would be merged in).
+          tar -xzf "${RUNNER_TEMP}/trusted.tar.gz" -C "${RUNNER_TEMP}/trusted" \
+            --strip-components=2 --wildcards --no-wildcards-match-slash '*/agent-review/*'
+          rm "${RUNNER_TEMP}/trusted.tar.gz"
+          [ -f "${RUNNER_TEMP}/trusted/bin/run-review" ] || { echo "::error::No agent-review/bin/run-review in ${REPO}@${SHA}."; exit 1; }
+          echo "::notice::Agent review files from ${REPO}@${SHA}."
+
       # 'pull_request_target' ignores the fork-approval setting, so without
       # this gate anyone opening a PR could spend the inference allocation.
       # The checked user is the PR author for automatic runs and the labeller
@@ -174,9 +219,15 @@ jobs:
       # re-resolved: later pushes to the PR are not reviewed by this run.
       #
       # Inputs come from the caller's workflow file: the default branch under
-      # 'pull_request_target', the dispatched ref otherwise. Each value
-      # becomes a path, an argument or prompt text, so each is validated;
-      # the caps can only be lowered.
+      # 'pull_request_target', the dispatched ref or the PR otherwise. Each
+      # value becomes a path, an argument, a URL or prompt text, so each is
+      # validated; the caps can only be lowered; the endpoint must be in the
+      # central allowlist. The event and harness rules are in the script.
+      #
+      # This job declares no environment, so 'secrets.inference_api_key' is
+      # non-empty here only if the caller maps a repository or organization
+      # secret, which every job would then receive: the script fails. The
+      # expression yields only 'true' or 'false', never the key.
       #
       # An API failure is an error, not a denial, so a broken gate is visible.
       - name: Authorize
@@ -193,10 +244,13 @@ jobs:
           EVENT_PR: ${{ github.event.pull_request.number }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_DRAFT: ${{ github.event.pull_request.draft }}
+          EVENT_LABEL: ${{ github.event.label.name }}
           IN_PR: ${{ inputs.pr }}
           IN_HARNESS: ${{ inputs.harness }}
           IN_MODEL: ${{ inputs.model }}
           IN_DRY_RUN: ${{ inputs.dry_run }}
+          IN_LABEL: ${{ inputs.label }}
           IN_PROJECT: ${{ inputs.project_name }}
           IN_RULES: ${{ inputs.rule_files }}
           IN_PATTERNS: ${{ inputs.instruction_files }}
@@ -211,156 +265,8 @@ jobs:
           TRUSTED_REPO: ${{ job.workflow_repository }}
           TRUSTED_SHA: ${{ job.workflow_sha }}
           CALLER_WF_SHA: ${{ github.workflow_sha }}
-        run: |
-          docs="See https://github.com/GridTools/ci-workflows/blob/main/docs/agent-review.md#configuration."
-          fail() {
-            echo "allowed=false" >> "$GITHUB_OUTPUT"
-            echo "::error::$1 ${docs}"
-            exit 1
-          }
-          resolve_pr() {
-            [[ "$1" =~ ^[1-9][0-9]{0,9}$ ]] || fail "Invalid pull request number '$1'."
-            if ! shas=$(gh api "repos/${source_repo}/pulls/$1" --jq '[.head.sha, .base.sha] | @tsv' 2>&1); then
-              fail "Could not resolve pull request ${source_repo}#$1: '${shas}'."
-            fi
-            read -r head_sha base_sha <<< "${shas}"
-          }
-          int_in() { # name value max
-            if ! [[ "$2" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$2" -gt "$3" ]; then
-              fail "Input $1 must be an integer in 1..$3, got '$2'."
-            fi
-          }
-          check_paths() { # name list plain|glob
-            local line re='^[A-Za-z0-9_.][A-Za-z0-9_./-]{0,199}$'
-            [ "$3" = glob ] && re='^[A-Za-z0-9_.*][A-Za-z0-9_.*/-]{0,199}$'
-            while IFS= read -r line; do
-              line=${line#"${line%%[![:space:]]*}"}; line=${line%"${line##*[![:space:]]}"}
-              case "${line}" in '' | '#'*) continue ;; esac
-              [[ "${line}" =~ ${re} ]] || fail "Invalid entry in $1: '${line}'."
-              case "/${line}/" in */../* | */./* | *//*) fail "Invalid entry in $1: '${line}'." ;; esac
-            done <<< "$2"
-          }
-
-          # The workflow's own commit, from which every trusted file is read.
-          [[ "${TRUSTED_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "No job.workflow_repository ('${TRUSTED_REPO}')."
-          [[ "${TRUSTED_SHA}" =~ ^[0-9a-f]{40}$ ]] || fail "No job.workflow_sha ('${TRUSTED_SHA}')."
-          echo "::notice::Agent review workflow ${TRUSTED_REPO}@${TRUSTED_SHA}; caller ${REPO}@${CALLER_WF_SHA}."
-
-          harness=${IN_HARNESS}
-          case "${harness}" in
-            stub | opencode | pi) ;;
-            '') fail "No harness given (input 'harness')." ;;
-            *) fail "Unknown harness '${harness}'." ;;
-          esac
-
-          # The self-test: this repository calling its own workflow with the
-          # stub harness, which calls no model, gets no key and never posts.
-          self_test=false
-          [ "${TRUSTED_REPO}" != "${REPO}" ] || [ "${harness}" != stub ] || self_test=true
-
-          dry_run=${IN_DRY_RUN}
-          # The repository whose pull request is reviewed: the caller's, or
-          # (self-test only) another public repository, read-only.
-          source_repo=${REPO}
-          if [ -n "${IN_TEST_REPO}" ]; then
-            [ "${self_test}" = true ] || fail "Input test_repository is for the self-test of ${TRUSTED_REPO} with the 'stub' harness only."
-            [[ "${IN_TEST_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "Invalid test_repository '${IN_TEST_REPO}'."
-            source_repo=${IN_TEST_REPO}
-          fi
-
-          check_writer=true
-          case "${EVENT}" in
-            pull_request_target)
-              [ -z "${IN_TEST_REPO}" ] || fail "Input test_repository is not supported under 'pull_request_target'."
-              pr=${EVENT_PR}
-              head_sha=${EVENT_HEAD_SHA}
-              base_sha=${EVENT_BASE_SHA}
-              if [ "${ACTION}" = labeled ]; then actor=${SENDER}; else actor=${AUTHOR}; fi
-              ;;
-            workflow_dispatch)
-              pr=${IN_PR}
-              resolve_pr "${pr}"
-              actor=${ACTOR}
-              ;;
-            pull_request | push | schedule)
-              # Nothing to spend and nothing to post, so no writer check (meant
-              # to let Dependabot's pull requests run the self-test too).
-              [ "${self_test}" = true ] || fail "Event '${EVENT}' is for the self-test of ${TRUSTED_REPO} with the 'stub' harness only."
-              pr=${IN_PR}
-              resolve_pr "${pr}"
-              actor=${ACTOR}
-              check_writer=false
-              ;;
-            *) fail "Unexpected event '${EVENT}'." ;;
-          esac
-          # Never comment on a pull request of the caller that merely has the
-          # same number as the reviewed one, and never post from a self-test.
-          if [ "${source_repo}" != "${REPO}" ] || [ "${check_writer}" = false ]; then
-            dry_run=true
-          fi
-
-          if [ "${check_writer}" = true ]; then
-            if ! level=$(gh api "repos/${REPO}/collaborators/${actor}/permission" --jq '.permission' 2>&1); then
-              fail "Could not resolve repository permission for '${actor}', denying: '${level}'."
-            fi
-            # 'permission' reports the 'maintain' role as 'write'.
-            case "${level}" in
-              admin | write)
-                echo "::notice::${actor} has '${level}' permission; running the agent review."
-                ;;
-              *)
-                echo "::notice::${actor} has '${level}' permission; skipping the agent review."
-                echo "allowed=false" >> "$GITHUB_OUTPUT"
-                exit 0
-                ;;
-            esac
-          else
-            echo "::notice::Self-test (event '${EVENT}', harness 'stub', dry run); no permission check."
-          fi
-
-          # Validated here because the later steps tolerate failure, which
-          # would hide a misconfiguration.
-          [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid head sha '${head_sha}'."
-          [[ "${base_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid base sha '${base_sha}'."
-          # The stub calls no model. The others have no default model on
-          # purpose, as for PR Agent.
-          if [ "${harness}" = stub ]; then
-            model=none
-          else
-            model=${IN_MODEL}
-            [ -n "${model}" ] || fail "No model given for harness '${harness}' (input 'model')."
-            [[ "${model}" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]] || fail "Invalid model id '${model}'."
-          fi
-          case "${dry_run}" in true | false) ;; *) fail "Invalid dry-run flag '${dry_run}'." ;; esac
-          project=${IN_PROJECT:-${REPO#*/}}
-          [[ "${project}" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,63}$ ]] || fail "Invalid project name '${project}'."
-          check_paths rule_files "${IN_RULES}" plain
-          check_paths instruction_files "${IN_PATTERNS}" glob
-          [ "$(grep -c . <<< "${IN_ADDENDUM}")" -le 1 ] || fail "Input prompt_addendum takes one path."
-          [ -z "${IN_ADDENDUM}" ] || check_paths prompt_addendum "${IN_ADDENDUM}" plain
-          [[ "${IN_API_BASE}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$ ]] || fail "Invalid api_base '${IN_API_BASE}'."
-          [[ "${IN_ENVIRONMENT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || fail "Invalid environment '${IN_ENVIRONMENT}'."
-          # Ceilings: a caller can lower the caps, never raise them. The
-          # review job also clamps them to agent-review/awf.yaml.
-          int_in requests_per_hour "${IN_RPH}" 100
-          int_in requests_per_minute "${IN_RPM}" 30
-          int_in max_turns "${IN_TURNS}" 80
-          int_in harness_timeout_minutes "${IN_TIMEOUT}" 20
-
-          {
-            echo "allowed=true"
-            echo "pr=${pr}"
-            echo "head_sha=${head_sha}"
-            echo "base_sha=${base_sha}"
-            echo "harness=${harness}"
-            echo "model=${model}"
-            echo "dry_run=${dry_run}"
-            echo "project=${project}"
-            echo "source_repo=${source_repo}"
-            echo "trusted_repo=${TRUSTED_REPO}"
-            echo "trusted_sha=${TRUSTED_SHA}"
-          } >> "$GITHUB_OUTPUT"
-          echo "::notice::Reviewing ${source_repo}#${pr} at ${head_sha} with harness '${harness}', model '${model}', dry run '${dry_run}'."
+          HAS_SHARED_KEY: ${{ secrets.inference_api_key != '' }}
+        run: bash "${RUNNER_TEMP}/trusted/bin/authorize"
 
   prepare:
     needs: authorize
@@ -376,13 +282,7 @@ jobs:
     outputs:
       version: ${{ steps.install.outputs.version }}
     steps:
-      # From this workflow's own commit, never the PR or the caller, so a PR
-      # cannot change its review policy, prompt or harness. The commit comes
-      # from 'authorize' and is checked against this job's own
-      # 'job.workflow_sha': every job of one call runs the same commit. Not
-      # 'actions/checkout': in 'review' its post step would run git in a
-      # workspace the sandbox can write ('core.fsmonitor' and the like). The
-      # caller's token can read this repository because it is public.
+      # As in 'authorize', checked against the commit it recorded.
       - &fetch-trusted
         name: Fetch trusted files
         env:
@@ -391,20 +291,7 @@ jobs:
           SHA: ${{ needs.authorize.outputs.trusted_sha }}
           OWN_REPO: ${{ job.workflow_repository }}
           OWN_SHA: ${{ job.workflow_sha }}
-        run: |
-          if [ "${REPO}" != "${OWN_REPO}" ] || [ "${SHA}" != "${OWN_SHA}" ]; then
-            echo "::error::Workflow commit changed between jobs: '${REPO}@${SHA}' vs '${OWN_REPO}@${OWN_SHA}'."
-            exit 1
-          fi
-          mkdir -p "${RUNNER_TEMP}/trusted"
-          gh api "repos/${REPO}/tarball/${SHA}" > "${RUNNER_TEMP}/trusted.tar.gz"
-          # Only the top-level 'agent-review/' directory ('*' must not match
-          # '/', or a nested directory of that name would be merged in).
-          tar -xzf "${RUNNER_TEMP}/trusted.tar.gz" -C "${RUNNER_TEMP}/trusted" \
-            --strip-components=2 --wildcards --no-wildcards-match-slash '*/agent-review/*'
-          rm "${RUNNER_TEMP}/trusted.tar.gz"
-          [ -f "${RUNNER_TEMP}/trusted/bin/run-review" ] || { echo "::error::No agent-review/bin/run-review in ${REPO}@${SHA}."; exit 1; }
-          echo "::notice::Agent review files from ${REPO}@${SHA}."
+        run: *fetch-trusted-run
 
       - name: Install the harness
         id: install
@@ -420,17 +307,29 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           tar -C "${prefix}" -cf "${RUNNER_TEMP}/harness.tar" .
 
+      # Artifact names carry the call's id, so two calls in one caller run
+      # (a matrix, or two jobs) do not collide.
       - name: Upload the harness
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: agent-review-harness
+          name: agent-review-harness-${{ needs.authorize.outputs.call_id }}
           path: ${{ runner.temp }}/harness.tar
           if-no-files-found: error
           retention-days: 1
 
+  # The keyed review: the only job with the caller's environment, and the
+  # only one that can read the key. 'review-keyless' below runs the same
+  # steps (YAML aliases) without environment and without any 'secrets.'
+  # reference; tests/test-workflow-structure.py checks both properties.
   review:
     needs: [authorize, prepare]
-    if: needs.authorize.outputs.allowed == 'true'
+    # 'authorize' decides 'keyed' from its harness allowlist, never from an
+    # input, and allows keyed harnesses only for these two events; the event
+    # condition here is a backstop.
+    if: >-
+      needs.authorize.outputs.allowed == 'true'
+      && needs.authorize.outputs.keyed == 'true'
+      && (github.event_name == 'pull_request_target' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     # The CALLER's environment, holding the dedicated inference key, passed
     # here only through the caller's explicit secret mapping. The caller must
@@ -440,19 +339,25 @@ jobs:
     # and without the secret, on the first run; the review is then skipped.
     # Each run records a deployment in the caller repository.
     environment: ${{ inputs.environment }}
+    # One keyed review per pull request at a time, whatever the caller's own
+    # concurrency; a prefix of its own, so it cannot share the caller's
+    # group. A newer pending run replaces an older pending one.
+    concurrency:
+      group: agent-review-keyed-${{ needs.authorize.outputs.pr }}
+      cancel-in-progress: false
     # Backstop; the effective limit is on the 'Run the review' step.
     timeout-minutes: 45
     # Read-only: the token is used before the sandbox starts, and no step
     # after it uses one.
-    permissions:
+    permissions: &review-permissions
       contents: read
       pull-requests: read
-    outputs:
+    outputs: &review-outputs
       fetch_outcome: ${{ steps.fetch.outcome }}
       outcome: ${{ steps.agent.outcome }}
       exit_code: ${{ steps.agent.outputs.exit_code }}
       skipped: ${{ steps.key.outputs.skipped }}
-    env:
+    env: &review-env
       # The sandbox's working area. AWF mounts the workspace read-write, so
       # everything under it is untrusted once the sandbox has run.
       WS: ${{ github.workspace }}/agent-review
@@ -466,10 +371,13 @@ jobs:
       - *fetch-trusted
 
       # Caller configuration: the validated inputs, and the addendum from the
-      # caller repository at the caller's workflow commit (never the PR).
+      # caller repository at the caller's workflow commit (never the PR,
+      # except in the caller test mode under 'pull_request').
       # 'run-review' fails closed if the addendum names a rule file that no
-      # reset pattern covers.
-      - name: Fetch the caller configuration
+      # reset pattern covers, or contains a placeholder, and checks after
+      # the reset that every such file is its base version.
+      - &fetch-config
+        name: Fetch the caller configuration
         env:
           GH_TOKEN: ${{ github.token }}
           CALLER_REPO: ${{ github.repository }}
@@ -493,7 +401,8 @@ jobs:
 
       # /opt is mounted read-only into the sandbox, and the files are owned
       # by root, so the agent cannot change the scripts that run after it.
-      - name: Prepare the sandbox inputs
+      - &prepare-inputs
+        name: Prepare the sandbox inputs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ needs.authorize.outputs.source_repo }}
@@ -520,14 +429,16 @@ jobs:
               harness: $harness, model: $model, harness_timeout_minutes: $timeout,
               project: $project, stub_padding_kib: 0}' > "${WS}/in/params.json"
 
-      - name: Download the harness
+      - &download-harness
+        name: Download the harness
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: agent-review-harness
+          name: agent-review-harness-${{ needs.authorize.outputs.call_id }}
           path: ${{ runner.temp }}/harness-artifact
 
       # Unpacked only: harness code never runs on the host, only in the sandbox.
-      - name: Unpack the harness
+      - &unpack-harness
+        name: Unpack the harness
         run: |
           sudo mkdir -p "/opt/agent-review/harness/${HARNESS}"
           sudo tar -xf "${RUNNER_TEMP}/harness-artifact/harness.tar" --no-same-owner --no-same-permissions \
@@ -537,8 +448,11 @@ jobs:
 
       # The action verifies the release's signed provenance with the workflow
       # token; the version is pinned too, and its 'image-tag' output carries
-      # the image digests.
-      - name: Set up AWF
+      # the image digests. Dependabot ignores this action (.github/
+      # dependabot.yml): bump the SHA and 'version' together, by hand, and
+      # re-run the AWF probes.
+      - &setup-awf
+        name: Set up AWF
         id: awf
         uses: github/gh-aw-firewall@7dc485464a58130d6ac2e73fe632424eb5d06823 # v0.29.12
         with:
@@ -555,7 +469,8 @@ jobs:
       # upstream is the OpenAI target. The workspace is the only host
       # directory the sandbox may write to. The caller's caps are clamped to
       # the values in awf.yaml, which are the ceilings.
-      - name: Render the AWF configuration
+      - &render-awf
+        name: Render the AWF configuration
         env:
           MODEL: ${{ needs.authorize.outputs.model }}
           RPH: ${{ inputs.requests_per_hour }}
@@ -586,8 +501,9 @@ jobs:
           mkdir -p /tmp/gh-aw/sandbox/firewall/audit /tmp/gh-aw/sandbox/firewall/logs /tmp/gh-aw/mcp-logs
           echo "AWF_BIN=$(command -v awf)" >> "$GITHUB_ENV"
 
-      # The adapter declares whether it calls a model. The key is not read
-      # here: the expression yields only 'true' or 'false'.
+      # The adapter declares whether it calls a model; a keyed harness must.
+      # The key is not read here: the expression yields only 'true' or
+      # 'false'.
       - name: Check the inference key
         id: key
         env:
@@ -602,8 +518,7 @@ jobs:
                 echo "skipped=true" >> "$GITHUB_OUTPUT"
               fi
               ;;
-            none) ;;
-            *) echo "::error::Unsupported wire '${wire}' for harness '${HARNESS}'."; exit 1 ;;
+            *) echo "::error::Unsupported wire '${wire}' for the keyed harness '${HARNESS}'."; exit 1 ;;
           esac
 
       # No key and no agent: only 'run-review' runs, and git on the PR with
@@ -612,13 +527,14 @@ jobs:
       # ('::...::'); no '::stop-commands::', whose token would be printed to
       # the live log first. 'sudo -E' passes the environment to AWF, which
       # forwards none of it to the sandbox except what it sets itself.
-      - name: Fetch the pull request in the sandbox
+      - &fetch-pr
+        name: Fetch the pull request in the sandbox
         id: fetch
         if: steps.key.outputs.skipped != 'true'
         continue-on-error: true
         timeout-minutes: 12
         env:
-          AGENT_REVIEW_OPENAI_BASE_URL: ${{ inputs.api_base }}
+          AGENT_REVIEW_OPENAI_BASE_URL: ${{ needs.authorize.outputs.api_base }}
           IMAGE_TAG: ${{ steps.awf.outputs.image-tag }}
         run: |
           sudo -E "${AWF_BIN}" \
@@ -644,11 +560,12 @@ jobs:
         env:
           # The only place the key appears. AWF hands it to the API-proxy
           # sidecar and gives the agent a placeholder. A dedicated key: its
-          # budget is the hard cap.
+          # budget is the hard cap. The endpoint is an entry of the central
+          # allowlist (agent-review/api-bases.txt), chosen in 'authorize'.
           KEY: ${{ secrets.inference_api_key }}
-          AGENT_REVIEW_OPENAI_BASE_URL: ${{ inputs.api_base }}
+          AGENT_REVIEW_OPENAI_BASE_URL: ${{ needs.authorize.outputs.api_base }}
           IMAGE_TAG: ${{ steps.awf.outputs.image-tag }}
-        run: |
+        run: &run-agent |
           # Only AWF's OpenAI listener is used: never pass ANTHROPIC_API_KEY.
           # With it, AWF v0.29.12 configures an Anthropic listener whose
           # 'POST /messages' escapes the 'maxTurns' count, and its entrypoint
@@ -677,7 +594,8 @@ jobs:
       # 'awf' normally removes its containers, but a step timeout or a
       # cancellation may leave them. The job starts no container of its own,
       # so all are removed. Nothing is collected if any survives.
-      - name: Stop the sandbox
+      - &teardown
+        name: Stop the sandbox
         id: teardown
         if: always() && steps.key.outputs.skipped != 'true'
         shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
@@ -698,25 +616,28 @@ jobs:
       # Absolute paths and a fixed PATH: the runner's default PATH searches
       # home directories such as ~/.local/bin before /usr/bin, and the sandbox
       # could write there.
-      - name: Collect the result
+      - &collect
+        name: Collect the result
         if: always() && steps.key.outputs.skipped != 'true' && steps.teardown.outcome == 'success'
         shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
         env:
           PATH: /usr/bin:/bin
         run: /usr/bin/bash /opt/agent-review/bin/collect-result "${WS}/out" "${RUNNER_TEMP}/result"
 
-      - name: Upload the result
+      - &upload-result
+        name: Upload the result
         if: always() && steps.key.outputs.skipped != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: agent-review-result
+          name: agent-review-result-${{ needs.authorize.outputs.call_id }}
           path: ${{ runner.temp }}/result
           if-no-files-found: ignore
           retention-days: 7
 
       # Cost of the review, from the API proxy's own log (written by the
       # sidecar under $RUNNER_TEMP, out of the sandbox's reach). Numbers only.
-      - name: Report token usage
+      - &token-usage
+        name: Report token usage
         if: always() && steps.key.outputs.skipped != 'true'
         shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
         env:
@@ -737,7 +658,8 @@ jobs:
       # Off by default: artifacts of public repositories are downloadable by
       # any signed-in user. The Phase 0 probe found no key or auth header in
       # the audit files or the proxy logs.
-      - name: Make the AWF audit log readable
+      - &audit-readable
+        name: Make the AWF audit log readable
         if: always() && steps.key.outputs.skipped != 'true' && inputs.upload_audit
         shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
         env:
@@ -746,11 +668,12 @@ jobs:
           /usr/bin/sudo /usr/bin/chmod -R a+rX "${RUNNER_TEMP}/awf-fetch-audit" "${RUNNER_TEMP}/awf-fetch-logs" \
             "${RUNNER_TEMP}/awf-audit" "${RUNNER_TEMP}/awf-logs"
 
-      - name: Upload the AWF audit log
+      - &audit-upload
+        name: Upload the AWF audit log
         if: always() && steps.key.outputs.skipped != 'true' && inputs.upload_audit
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: agent-review-audit
+          name: agent-review-audit-${{ needs.authorize.outputs.call_id }}
           path: |
             ${{ runner.temp }}/awf-fetch-audit
             ${{ runner.temp }}/awf-fetch-logs
@@ -759,9 +682,55 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The same steps for a harness that calls no model: no 'environment:', no
+  # 'secrets.' reference, so neither a key nor a deployment, and it runs on
+  # any ref (a caller's PR, a branch dispatch). Only the key check and the
+  # agent step's environment differ from 'review'.
+  review-keyless:
+    needs: [authorize, prepare]
+    if: needs.authorize.outputs.allowed == 'true' && needs.authorize.outputs.keyed == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions: *review-permissions
+    outputs: *review-outputs
+    env: *review-env
+    steps:
+      - *fetch-trusted
+      - *fetch-config
+      - *prepare-inputs
+      - *download-harness
+      - *unpack-harness
+      - *setup-awf
+      - *render-awf
+      # 'authorize' sends only harnesses from its keyless list here; the
+      # adapter must agree.
+      - name: Check the harness wire
+        id: key
+        run: |
+          wire=$(head -n 1 "/opt/agent-review/harnesses/${HARNESS}/wire")
+          [ "${wire}" = none ] || { echo "::error::Harness '${HARNESS}' has wire '${wire}' but was not authorized as keyed."; exit 1; }
+      - *fetch-pr
+      - name: Run the review in the sandbox
+        id: agent
+        if: steps.key.outputs.skipped != 'true' && steps.fetch.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          AGENT_REVIEW_OPENAI_BASE_URL: ${{ needs.authorize.outputs.api_base }}
+          IMAGE_TAG: ${{ steps.awf.outputs.image-tag }}
+        run: *run-agent
+      - *teardown
+      - *collect
+      - *upload-result
+      - *token-usage
+      - *audit-readable
+      - *audit-upload
+
   publish:
-    needs: [authorize, prepare, review]
-    if: always() && needs.authorize.outputs.allowed == 'true' && needs.review.result != 'skipped'
+    needs: [authorize, prepare, review, review-keyless]
+    if: >-
+      always() && needs.authorize.outputs.allowed == 'true'
+      && (needs.review.result != 'skipped' || needs.review-keyless.result != 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The only job with a write token. It runs no model and no PR code, and
@@ -781,11 +750,11 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: agent-review-result
+          name: agent-review-result-${{ needs.authorize.outputs.call_id }}
           path: ${{ runner.temp }}/result
 
       # No token in this step: validating and rendering the hostile review
-      # needs none.
+      # needs none. At most one of the two review jobs ran.
       - name: Render the review
         id: render
         env:
@@ -794,7 +763,7 @@ jobs:
           HEAD_SHA: ${{ needs.authorize.outputs.head_sha }}
           VERSION: ${{ needs.prepare.outputs.version }}
           DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
-          SKIPPED: ${{ needs.review.outputs.skipped }}
+          SKIPPED: ${{ needs.review.outputs.skipped || needs.review-keyless.outputs.skipped }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           pc="${RUNNER_TEMP}/trusted/bin/publish-comment"
@@ -849,9 +818,9 @@ jobs:
         if: steps.render.outputs.result == 'missing' || steps.render.outputs.result == 'invalid'
         env:
           RESULT: ${{ steps.render.outputs.result }}
-          FETCH_OUTCOME: ${{ needs.review.outputs.fetch_outcome }}
-          OUTCOME: ${{ needs.review.outputs.outcome }}
-          EXIT_CODE: ${{ needs.review.outputs.exit_code }}
+          FETCH_OUTCOME: ${{ needs.review.outputs.fetch_outcome || needs.review-keyless.outputs.fetch_outcome }}
+          OUTCOME: ${{ needs.review.outputs.outcome || needs.review-keyless.outputs.outcome }}
+          EXIT_CODE: ${{ needs.review.outputs.exit_code || needs.review-keyless.outputs.exit_code }}
         run: |
           case "${RESULT}" in
             missing) reason="the agent produced no review (fetch outcome '${FETCH_OUTCOME}', review outcome '${OUTCOME}', exit code '${EXIT_CODE}')" ;;
