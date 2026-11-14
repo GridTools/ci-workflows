@@ -400,16 +400,13 @@ class Run:
         files.write_new(os.path.join(self.result_dir, "meta.json"), text.encode("utf-8"))
 
 
-def _heading_offset(fd: int, size: int) -> int | None:
+def _heading_offset(fd: int) -> int | None:
     """The offset of the first line that starts with '### ', or None."""
     if os.pread(fd, len(HEADING), 0) == HEADING:
         return 0
     needle = b"\n" + HEADING
     pos, tail = 0, b""
-    while pos < size:
-        chunk = os.pread(fd, _SCAN_CHUNK, pos)
-        if not chunk:
-            break
+    while chunk := os.pread(fd, _SCAN_CHUNK, pos):
         window = tail + chunk
         found = window.find(needle)
         if found >= 0:
@@ -425,9 +422,11 @@ def read_review(path: str) -> tuple[bytes, bool] | None:
     Models often open their answer with a note ("Writing the final review
     now.") although the prompt asks them to start with '### Summary': the
     review is kept from its first '### ' heading, if any (as awk did, with
-    a final newline). Over REVIEW_MAX_BYTES, it is cut and a note appended.
-    Invalid or cut UTF-8 sequences are dropped. The file is scanned, never
-    read whole: the agent controls its size.
+    a final newline). Over REVIEW_MAX_BYTES, it is cut and a note appended;
+    that is decided from the bytes read, never from the file's size, which
+    the agent can change meanwhile. Invalid or cut UTF-8 sequences are
+    dropped. The file is scanned, never read whole: the agent controls its
+    size.
     """
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
@@ -437,16 +436,14 @@ def read_review(path: str) -> tuple[bytes, bool] | None:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_size == 0:
             return None
-        size = st.st_size
-        start = _heading_offset(fd, size)
-        final_newline = start is not None and os.pread(fd, 1, size - 1) != b"\n"
-        start = start or 0
-        body_size = size - start + int(final_newline)
+        start = _heading_offset(fd)
+        # At most one byte more than the limit, so that 'too long' is known.
         wanted = REVIEW_MAX_BYTES + 1
-        chunks, pos, got = [], start, 0
+        chunks, pos, got, at_end = [], start or 0, 0, False
         while got < wanted:
             chunk = os.pread(fd, wanted - got, pos)
             if not chunk:
+                at_end = True
                 break
             chunks.append(chunk)
             pos += len(chunk)
@@ -454,9 +451,9 @@ def read_review(path: str) -> tuple[bytes, bool] | None:
     finally:
         os.close(fd)
     body = b"".join(chunks)
-    if final_newline and len(body) < wanted:
+    if start is not None and at_end and body and not body.endswith(b"\n"):
         body += b"\n"
-    if body_size > REVIEW_MAX_BYTES:
+    if len(body) > REVIEW_MAX_BYTES:
         return prompt.clip(body, REVIEW_MAX_BYTES - 100) + TRUNCATION_NOTE, True
     return prompt.clip(body, len(body)), False
 

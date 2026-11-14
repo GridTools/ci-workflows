@@ -642,3 +642,19 @@ def test_out_that_cannot_be_emptied_is_replaced(tmp_path: pathlib.Path, upstream
     finally:
         for d in ws.glob("out*/d"):
             d.chmod(0o755)
+
+
+def test_truncation_is_decided_from_the_bytes_read(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The size fstat reports can be stale (the agent may still write): it decides nothing but emptiness."""
+    path = tmp_path / "review.md"
+    path.write_bytes(b"### S\n" + b"x" * 70000)
+    real_fstat = os.fstat
+
+    def stale_fstat(fd: int) -> os.stat_result:
+        st = real_fstat(fd)
+        return os.stat_result((st.st_mode, *tuple(st)[1:6], 10, *tuple(st)[7:]))
+
+    monkeypatch.setattr(run_review.os, "fstat", stale_fstat)
+    review, truncated = run_review.read_review(str(path)) or (b"", False)
+    assert truncated
+    assert review.endswith(run_review.TRUNCATION_NOTE)
