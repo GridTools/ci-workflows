@@ -20,6 +20,7 @@ from workflow_structure import (
     entry_problems,
     host_path_problems,
     load,
+    post_sandbox_problems,
     python_word_problems,
     repository,
     sandbox_output_problems,
@@ -166,6 +167,9 @@ def main() -> int:
     check_problems(python_word_problems(workflow, kinds), "agent-review.yml: no other Python, no pip, no setup-python")
     check_problems(shell_python_problems(repo["shell"], kinds), "shell files: Python only in the exact call form")
     check_problems(host_path_problems(workflow), "host calls of entry points: 'PATH: /usr/bin:/bin' on the step")
+    check_problems(
+        post_sandbox_problems(workflow), "after the sandbox: no token, fixed shell and PATH, the result path"
+    )
     check_problems(
         sandbox_output_problems(workflow, repo["shell"]["harnesses/common.sh"]),
         "sandbox output: prefixed, no carriage return, no legacy '##[' (awf steps and diag)",

@@ -321,6 +321,62 @@ def host_path_problems(workflow: Mapping[str, Any]) -> list[str]:
     return problems
 
 
+# --- After the sandbox (invariant 3) -------------------------------------------------------
+
+TAINTED_SHELL = "/usr/bin/bash --noprofile --norc -e -o pipefail {0}"
+RESULT_PATH = "${{ runner.temp }}/result"
+RESULT_ARTIFACT = "agent-review-result-"
+TOKEN_REFS = ("GH_TOKEN", "github.token", "secrets.")
+
+
+def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:
+    """Yields (path, key) for every mapping key in a YAML tree ('env: {GH_TOKEN: ...}')."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield (*path, str(key)), str(key)
+            yield from _keys(value, (*path, str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _keys(value, (*path, str(index)))
+
+
+def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
+    """The steps after the agent's run ('id: agent') in both review jobs treat the host as tainted.
+
+    No token or secret reference; every 'run:' step uses the fixed shell
+    and 'PATH: /usr/bin:/bin'; only 'actions/upload-artifact' as an action;
+    the result upload's 'path' is exactly '${{ runner.temp }}/result'.
+    """
+    problems = []
+    for job_id in REVIEW_JOBS:
+        steps = workflow["jobs"][job_id]["steps"]
+        ids = [step.get("id") for step in steps]
+        if "agent" not in ids:
+            problems.append(f"{job_id}: no step with 'id: agent'")
+            continue
+        uploads = 0
+        for step in steps[ids.index("agent") + 1 :]:
+            where = f"{job_id}/{step.get('name', '?')}"
+            for path, value in [*strings(step), *_keys(step)]:
+                problems += [f"{where}: '{ref}' in {'/'.join(path)}" for ref in TOKEN_REFS if ref in value]
+            if "run" in step:
+                if step.get("shell") != TAINTED_SHELL:
+                    problems.append(f"{where}: shell is not '{TAINTED_SHELL}'")
+                if (step.get("env") or {}).get("PATH") != FIXED_PATH:
+                    problems.append(f"{where}: env PATH is not '{FIXED_PATH}'")
+            uses = step.get("uses")
+            if uses is not None:
+                if not uses.startswith("actions/upload-artifact@"):
+                    problems.append(f"{where}: action '{uses}' after the sandbox")
+                elif str((step.get("with") or {}).get("name", "")).startswith(RESULT_ARTIFACT):
+                    uploads += 1
+                    if step["with"].get("path") != RESULT_PATH:
+                        problems.append(f"{where}: the result upload's path is not '{RESULT_PATH}'")
+        if uploads != 1:
+            problems.append(f"{job_id}: {uploads} result upload(s) after the sandbox, not 1")
+    return problems
+
+
 # --- Sandbox output ------------------------------------------------------------------
 
 # Every line of AWF's output goes through exactly this filter: carriage

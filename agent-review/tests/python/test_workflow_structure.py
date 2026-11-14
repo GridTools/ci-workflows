@@ -609,3 +609,78 @@ def test_awf_steps_are_exempt_and_a_missing_host_step_fails() -> None:
         s for s in workflow["jobs"]["authorize"]["steps"] if s.get("name") != "Authorize"
     ]
     assert ws.host_path_problems(workflow) == ["authorize/Authorize: no host call of an entry point"]
+
+
+# --- After the sandbox (invariant 3; final security review R4) --------------------------------
+
+
+def after_agent(workflow: dict[str, Any], job: str = "review") -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = workflow["jobs"][job]["steps"]
+    return steps[[step.get("id") for step in steps].index("agent") + 1 :]
+
+
+def step_named(workflow: dict[str, Any], name: str, job: str = "review") -> dict[str, Any]:
+    return next(step for step in after_agent(workflow, job) if step.get("name") == name)
+
+
+def test_real_post_sandbox_steps_pass() -> None:
+    assert ws.post_sandbox_problems(WORKFLOW) == []
+    names = [step["name"] for step in after_agent(WORKFLOW)]
+    assert names[:4] == ["Stop the sandbox", "Collect the result", "Upload the result", "Report token usage"]
+
+
+@pytest.mark.parametrize(
+    ("name", "change", "expected"),
+    [
+        ("Stop the sandbox", {"env": {"PATH": "/usr/bin:/bin", "GH_TOKEN": "x"}}, "'GH_TOKEN'"),
+        ("Stop the sandbox", {"env": {"PATH": "/usr/bin:/bin", "T": "${{ github.token }}"}}, "'github.token'"),
+        (
+            "Report token usage",
+            {"env": {"PATH": "/usr/bin:/bin", "T": "${{ secrets.inference_api_key }}"}},
+            "'secrets.'",
+        ),
+        (
+            "Upload the result",
+            {"with": {"name": "x", "path": "p", "github-token": "${{ github.token }}"}},
+            "'github.token'",
+        ),
+        ("Report token usage", {"shell": None}, "shell is not"),
+        ("Make the AWF audit log readable", {"shell": "bash"}, "shell is not"),
+        ("Collect the result", {"env": {}}, "env PATH is not"),
+        ("Stop the sandbox", {"env": {"PATH": "/home/runner/.local/bin:/usr/bin:/bin"}}, "env PATH is not"),
+        ("Upload the result", {"path": "${{ runner.temp }}"}, "the result upload's path is not"),
+        ("Upload the result", {"path": "${{ github.workspace }}/agent-review/out"}, "the result upload's path is not"),
+        ("Upload the result", {"name": "renamed"}, "0 result upload(s)"),
+        ("Upload the AWF audit log", {"uses": "actions/cache@0123456789abcdef0123456789abcdef01234567"}, "action"),
+    ],
+)
+def test_post_sandbox_rules_reject(name: str, change: dict[str, Any], expected: str) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    step = step_named(workflow, name)
+    for key, value in change.items():
+        if key in ("path", "name"):
+            step["with"][key] = value
+        elif value is None:
+            step.pop(key)
+        else:
+            step[key] = value
+    found = ws.post_sandbox_problems(workflow)
+    assert any(expected in p and p.startswith("review") for p in found), found
+
+
+def test_post_sandbox_rules_cover_the_keyless_job_too() -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    # Unshare the aliased step, then break it in the keyless job only.
+    steps = workflow["jobs"]["review-keyless"]["steps"]
+    index = next(i for i, step in enumerate(steps) if step.get("name") == "Report token usage")
+    steps[index] = {**steps[index], "env": {}}
+    assert ws.post_sandbox_problems(workflow) == ["review-keyless/Report token usage: env PATH is not '/usr/bin:/bin'"]
+    workflow["jobs"]["review"]["steps"] = [s for s in workflow["jobs"]["review"]["steps"] if s.get("id") != "agent"]
+    assert "review: no step with 'id: agent'" in ws.post_sandbox_problems(workflow)
+
+
+def test_steps_before_the_agent_may_hold_the_token() -> None:
+    # 'Fetch trusted files' and 'Prepare the sandbox inputs' use GH_TOKEN before the sandbox runs.
+    assert ws.post_sandbox_problems(WORKFLOW) == []
+    before = WORKFLOW["jobs"]["review"]["steps"]
+    assert any("GH_TOKEN" in (step.get("env") or {}) for step in before[: [s.get("id") for s in before].index("agent")])
