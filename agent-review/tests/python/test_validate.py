@@ -54,19 +54,19 @@ def test_pattern_refuses_anchors_and_unicode_patterns() -> None:
 
 
 def test_require() -> None:
-    assert validate.require(validate.REPO, "GridTools/gt4py", "repository") == "GridTools/gt4py"
+    assert validate.require(validate.REPO, "example-org/example", "repository") == "example-org/example"
     with pytest.raises(validate.ValidationError, match="Invalid repository"):
-        validate.require(validate.REPO, "GridTools/gt4py/extra", "repository")
+        validate.require(validate.REPO, "example-org/example/extra", "repository")
 
 
 @pytest.mark.parametrize(
     ("compiled", "good", "bad"),
     [
         (validate.POSITIVE_INT, ["1", "2983", "9999999999"], ["0", "01", "10000000000"]),
-        (validate.REPO, ["a/b", "Grid-Tools/gt4py.x"], ["a", "a/b/c", "a /b", "a/b\n"]),
+        (validate.REPO, ["a/b", "Example-Org/repo.x"], ["a", "a/b/c", "a /b", "a/b\n"]),
         (validate.HARNESS, ["stub", "open-code"], ["Stub", "1x", "-x", "a" * 33]),
         (validate.MODEL, ["zai-org/GLM-5.3-Flash", "m:1"], ["-m", "m m", "/m"]),
-        (validate.PROJECT, ["GT4Py", "icon 4py"], [" x", "x\ty", "a" * 65]),
+        (validate.PROJECT, ["ExampleProj", "proj 4x"], [" x", "x\ty", "a" * 65]),
     ],
 )
 def test_shared_patterns(compiled: re.Pattern[str], good: list[str], bad: list[str]) -> None:

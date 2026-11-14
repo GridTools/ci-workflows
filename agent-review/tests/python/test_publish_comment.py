@@ -18,7 +18,7 @@ from agent_review import runner, sanitize
 AR_DIR = pathlib.Path(__file__).resolve().parents[2]
 ENTRY = [*("/usr/bin/python3", "-I", "-S", "-B"), str(AR_DIR / "bin" / "publish-comment")]
 SHA = "0123456789abcdef0123456789abcdef01234567"
-RUN_URL = "https://github.com/example-org/gt4py/actions/runs/1"
+RUN_URL = "https://github.com/example-org/example/actions/runs/1"
 MARKER = "<!-- agent-review:stub -->"
 
 
@@ -215,7 +215,7 @@ def fake_gh(tmp_path: pathlib.Path) -> tuple[pathlib.Path, dict[str, str]]:
 
 def post(directory: pathlib.Path, env: dict[str, str], body: bytes, *extra: str) -> subprocess.CompletedProcess[bytes]:
     (directory / "body.md").write_bytes(body)
-    argv = ["post", "--repo", "example-org/gt4py", "--pr", "9", "--harness", "stub", "--body-file", "body.md", *extra]
+    argv = ["post", "--repo", "example-org/example", "--pr", "9", "--harness", "stub", "--body-file", "body.md", *extra]
     return subprocess.run([*ENTRY, *argv], cwd=directory, env=env, capture_output=True, timeout=60, check=False)
 
 
@@ -228,12 +228,12 @@ def test_post_json_body_and_listing(fake_gh: tuple[pathlib.Path, dict[str, str]]
     assert (directory / "list-args").read_text().splitlines() == [
         "api",
         "--paginate",
-        "repos/example-org/gt4py/issues/9/comments?per_page=100",
+        "repos/example-org/example/issues/9/comments?per_page=100",
         "--jq",
         pc.LISTING_JQ,
     ]
     log = (directory / "requests.log").read_bytes().split(b"\n", 1)
-    assert log[0] == b"POST repos/example-org/gt4py/issues/9/comments"
+    assert log[0] == b"POST repos/example-org/example/issues/9/comments"
     # Compact, as 'jq -Rsc', and the body exactly.
     assert log[1].startswith(b'{"body":"')
     assert json.loads(log[1]) == {"body": body.decode()}
@@ -244,7 +244,7 @@ def test_post_bot_login_override(fake_gh: tuple[pathlib.Path, dict[str, str]]) -
     (directory / "comments.tsv").write_text(f"15\tgithub-actions[bot]\t{MARKER}\n16\tother-bot\t{MARKER}\n")
     result = post(directory, {**env, "BOT_LOGIN": "other-bot"}, f"{MARKER}\n".encode())
     assert result.returncode == 0, result.stderr
-    assert (directory / "requests.log").read_bytes().startswith(b"PATCH repos/example-org/gt4py/issues/comments/16\n")
+    assert (directory / "requests.log").read_bytes().startswith(b"PATCH repos/example-org/example/issues/comments/16\n")
 
 
 def test_post_listing_failure_is_logged_safely(fake_gh: tuple[pathlib.Path, dict[str, str]]) -> None:
@@ -425,7 +425,7 @@ def test_huge_foreign_first_lines_do_not_block_the_upsert(jq_gh: tuple[pathlib.P
     assert len(old) > runner.MAX_STDOUT_BYTES
     result = post(directory, env, f"{MARKER}\nnew review\n".encode())
     assert result.returncode == 0, result.stderr
-    assert (directory / "requests.log").read_text() == "PATCH repos/example-org/gt4py/issues/comments/42\n"
+    assert (directory / "requests.log").read_text() == "PATCH repos/example-org/example/issues/comments/42\n"
 
 
 @pytest.mark.parametrize(
@@ -447,8 +447,8 @@ def test_projection_keeps_matching_exact(
     result = post(directory, env, f"{MARKER}\nnew\n".encode())
     assert result.returncode == 0, result.stderr
     want = (
-        "PATCH repos/example-org/gt4py/issues/comments/42"
+        "PATCH repos/example-org/example/issues/comments/42"
         if matches
-        else "POST repos/example-org/gt4py/issues/9/comments"
+        else "POST repos/example-org/example/issues/9/comments"
     )
     assert (directory / "requests.log").read_text() == want + "\n"

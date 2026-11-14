@@ -4,9 +4,9 @@ name: Self-test
 # structure tests, its Python tests, and the whole agent review pipeline end
 # to end with the 'stub' harness (the keyless job: no environment, no key,
 # no model call, nothing posted) through a LOCAL call, so the commit under
-# test is exactly the one whose files the pipeline fetches. The fixed
-# fixture is a merged public GT4Py pull request whose head is in a fork and
-# which changes AGENTS.md, so the cross-repository fetch by sha and the
+# test is exactly the one whose files the pipeline fetches. The fixture is
+# a fixed, merged public pull request whose head is in a fork and which
+# changes AGENTS.md, so the cross-repository fetch by sha and the
 # instruction-file reset run for real.
 
 on:

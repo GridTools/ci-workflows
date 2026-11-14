@@ -152,7 +152,7 @@ post() {
   echo "<!-- agent-review:stub -->" >body.md
   echo "text" >>body.md
   FAKE_DIR="${TMP}" PATH="${TMP}/bin:${PATH}" \
-    run_entry "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null
+    run_entry "${PC}" post --repo example-org/example --pr 9 --harness stub --body-file body.md >/dev/null
 }
 
 test_post_updates_own_marked_comment() {
@@ -163,7 +163,7 @@ test_post_updates_own_marked_comment() {
     $'14\tgithub-actions[bot]\t<!-- agent-review:opencode -->' \
     $'15\tgithub-actions[bot]\t<!-- agent-review:stub -->')"
   post &&
-    assert "PATCHed comment 15" grep -q "^PATCH repos/example-org/gt4py/issues/comments/15$" requests.log
+    assert "PATCHed comment 15" grep -q "^PATCH repos/example-org/example/issues/comments/15$" requests.log
 }
 
 test_post_creates_comment_without_marker_match() {
@@ -171,7 +171,7 @@ test_post_creates_comment_without_marker_match() {
     $'11\tsome-user\t<!-- agent-review:stub -->' \
     $'12\tgithub-actions[bot]\t## PR Reviewer Guide')"
   post &&
-    assert "POSTed a new comment" grep -q "^POST repos/example-org/gt4py/issues/9/comments$" requests.log &&
+    assert "POSTed a new comment" grep -q "^POST repos/example-org/example/issues/9/comments$" requests.log &&
     assert "body sent as JSON" grep -qF '"body":"<!-- agent-review:stub -->\ntext\n"' requests.log
 }
 
@@ -186,7 +186,7 @@ test_post_refuses_body_without_marker() {
   install_fake_gh ""
   echo "no marker" >body.md
   ! FAKE_DIR="${TMP}" PATH="${TMP}/bin:${PATH}" \
-    run_entry "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null 2>&1
+    run_entry "${PC}" post --repo example-org/example --pr 9 --harness stub --body-file body.md >/dev/null 2>&1
 }
 
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do run_test "$t"; done
