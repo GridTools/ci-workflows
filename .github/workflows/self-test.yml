@@ -167,10 +167,11 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # Reads this run's jobs and the keyless review's log, and the commit's
-    # deployments; nothing is written.
+    # Reads this run's jobs, the keyless review's log and annotations, and
+    # the commit's deployments; nothing is written.
     permissions:
       actions: read
+      checks: read
       deployments: read
     steps:
       - name: The stub review of the fixture was rendered, not posted
@@ -239,6 +240,18 @@ jobs:
           expect "Python on the host (prepare)" test "$(wc -l <<< "${host}")" -eq 1 -a -n "${host}"
           expect "Python in the sandbox" test "$(wc -l <<< "${sandbox}")" -eq 1 -a -n "${sandbox}"
           expect "the same Python version on both" test "$(cut -d' ' -f2 <<< "${host}")" = "$(cut -d' ' -f2 <<< "${sandbox}")"
+
+          # Sandbox output issues no workflow command in the legacy syntax
+          # either (invariant 11): the stub prints the probe on stdout and
+          # through 'diag'; neither may become an annotation of the job.
+          expect "the legacy-command probe ran (stdout and diag)" \
+            test "$(grep -c 'agent-review-legacy-probe' "${log}")" -ge 2
+          check_run=$(job 'e2e / review-keyless' check_run_url)
+          [[ "${check_run}" =~ ^https://api\.github\.com/(repos/[^/]+/[^/]+/check-runs/[0-9]+)$ ]] ||
+            { echo "::error::No check run for the keyless job."; exit 1; }
+          n=$(gh api --paginate "${BASH_REMATCH[1]}/annotations" \
+            --jq '.[] | select(.message | contains("agent-review-legacy-probe")) | .message' | wc -l)
+          expect "no annotation from the legacy-command probe (${n})" test "${n}" -eq 0
 
           # The keyless job requests no environment, so no deployment.
           n=$(gh api "repos/${REPO}/deployments?sha=${COMMIT}" --jq length)

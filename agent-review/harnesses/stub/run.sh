@@ -27,6 +27,15 @@ head_sha=$(git -c core.hooksPath=/dev/null -C "${REPO_DIR}" rev-parse HEAD)
 ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 /usr/bin/python3 -I -S -B "${ar_root}/bin/probe"
 
+# Sandbox output must not issue workflow commands in the legacy syntax
+# either, which the runner finds anywhere in a line (invariant 11): one line
+# on stdout and one through 'diag'. The self-test's 'check' job asserts
+# that neither became an annotation.
+# shellcheck source=../common.sh
+. "${ar_root}/harnesses/common.sh"
+echo "stub: ##[warning]agent-review-legacy-probe (stdout)"
+echo "##[warning]agent-review-legacy-probe (diag)" | ADAPTER_NAME=stub diag
+
 # Names only, never values: confirms in the log that no credential-like
 # variable other than AWF's placeholders reaches the sandbox.
 echo "stub: credential-like variables in the sandbox environment:"
