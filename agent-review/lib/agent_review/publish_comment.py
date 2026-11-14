@@ -18,7 +18,8 @@ Exit codes: 0 on success; 3 if the review is not valid UTF-8 or is empty
 The comment is found by a marker on its first line, among this workflow's
 own comments only (``BOT_LOGIN``), never with ``gh pr comment --edit-last``:
 other tools (PR Agent) post as the same bot. The comment listing is a
-``gh --jq`` projection (id, login, first line of the body, as TSV), so this
+``gh --jq`` projection (id, login, and the first 256 characters of the
+body's first line, as TSV), so this
 host never parses a comment body (invariant 2); only the first line is
 compared, as bytes, with the marker.
 """
@@ -43,8 +44,13 @@ LABEL = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}")
 # bash: ^https://github\.com/[A-Za-z0-9_./-]+$
 RUN_URL = validate.pattern(r"https://github\.com/[A-Za-z0-9_./-]+")
 COMMENT_ID = validate.pattern(r"[1-9][0-9]{0,19}")
-# The projection of the comment listing; a constant, never data.
-LISTING_JQ = '.[] | [.id, .user.login, (.body | split("\\n") | .[0])] | @tsv'
+# The projection of the comment listing; a constant, never data. Only the
+# first FIRST_LINE_CHARS characters of each first line: other users'
+# comments must not be able to push the listing past runner's output cap
+# (300 comments with 60 KB first lines would). Longer than any marker
+# (at most 150 characters), so the comparison stays exact.
+FIRST_LINE_CHARS = 256
+LISTING_JQ = f'.[] | [.id, .user.login, (.body | split("\\n") | .[0] | .[0:{FIRST_LINE_CHARS}])] | @tsv'
 ASCII_WHITESPACE = " \t\n\v\f\r"
 
 RENDER_OPTIONS = ("--harness", "--version", "--model", "--head-sha", "--run-url", "--review")
@@ -210,6 +216,8 @@ def cmd_post(args: Sequence[str]) -> bytes:
     if body_bytes is None:
         raise Failure(f"No body file '{path}'.")
     want = marker(harness)
+    if len(want) >= FIRST_LINE_CHARS:
+        raise Failure(f"The marker is not shorter than the {FIRST_LINE_CHARS} characters the listing keeps.")
     if body_bytes.split(b"\n", 1)[0] != want.encode("utf-8"):
         raise Failure("The body does not start with the marker.")
     try:

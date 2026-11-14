@@ -13,7 +13,7 @@ import subprocess
 import pytest
 
 from agent_review import publish_comment as pc
-from agent_review import sanitize
+from agent_review import runner, sanitize
 
 AR_DIR = pathlib.Path(__file__).resolve().parents[2]
 ENTRY = [*("/usr/bin/python3", "-I", "-S", "-B"), str(AR_DIR / "bin" / "publish-comment")]
@@ -349,3 +349,83 @@ def test_hostile_environment(fake_gh: tuple[pathlib.Path, dict[str, str]]) -> No
     posted = run("post", "--repo", "o/r", "--pr", "9", "--harness", "stub", "--body-file", "body.md")
     assert posted.returncode == 0, posted.stderr
     assert sorted(p.name for p in markers.iterdir()) == []
+
+
+# --- The listing projection (availability) -------------------------------------------
+
+
+def test_every_marker_fits_the_projection() -> None:
+    """A longer marker would be cut by the listing and never match again."""
+    longest = pc.marker("a" * 128)
+    assert pc.check_label("harness", "a" * 128)
+    with pytest.raises(pc.Failure):
+        pc.check_label("harness", "a" * 129)
+    assert len(longest) == 150
+    assert len(longest) < pc.FIRST_LINE_CHARS
+    assert f".[0:{pc.FIRST_LINE_CHARS}]" in pc.LISTING_JQ
+
+
+JQ_FAKE_GH = """#!/bin/sh
+# Applies the real --jq filter to FAKE_DIR/comments.json, as gh does per page.
+case "$1 $2" in
+  "api --paginate") [ "$4" = --jq ] || exit 9; exec /usr/bin/jq -r "$5" "${FAKE_DIR}/comments.json" ;;
+  "api -X") echo "$3 $4" >>"${FAKE_DIR}/requests.log"; cat >/dev/null; echo "https://example/c" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+"""
+
+
+@pytest.fixture
+def jq_gh(tmp_path: pathlib.Path) -> tuple[pathlib.Path, dict[str, str]]:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "gh").write_text(JQ_FAKE_GH)
+    (bindir / "gh").chmod(0o755)
+    env = {**os.environ, "PATH": f"{bindir}:/usr/bin:/bin", "FAKE_DIR": str(tmp_path)}
+    return tmp_path, env
+
+
+def comment(cid: int, login: str, body: str) -> dict[str, object]:
+    return {"id": cid, "user": {"login": login}, "body": body}
+
+
+def test_huge_foreign_first_lines_do_not_block_the_upsert(jq_gh: tuple[pathlib.Path, dict[str, str]]) -> None:
+    """300 comments with 60 KB first lines: the unbounded projection passed runner's 16 MiB cap."""
+    directory, env = jq_gh
+    huge = [comment(1000 + i, "some-user", "x" * 60000 + "\nrest") for i in range(300)]
+    comments = [*huge, comment(42, "github-actions[bot]", f"{MARKER}\nold review")]
+    path = directory / "comments.json"
+    path.write_text(json.dumps(comments))
+    # Negative control: the old projection's output is over the cap.
+    old_jq = '.[] | [.id, .user.login, (.body | split("\\n") | .[0])] | @tsv'
+    old = subprocess.run(["/usr/bin/jq", "-r", old_jq, str(path)], capture_output=True, check=True).stdout
+    assert len(old) > runner.MAX_STDOUT_BYTES
+    result = post(directory, env, f"{MARKER}\nnew review\n".encode())
+    assert result.returncode == 0, result.stderr
+    assert (directory / "requests.log").read_text() == "PATCH repos/example-org/gt4py/issues/comments/42\n"
+
+
+@pytest.mark.parametrize(
+    ("first_line", "matches"),
+    [
+        (MARKER, True),
+        (MARKER + " ", False),
+        (MARKER + "x" * 300, False),  # longer than the projection: cut, still no match
+        (" " + MARKER, False),
+        (MARKER + "\r", False),
+        (MARKER + "\t", False),
+    ],
+)
+def test_projection_keeps_matching_exact(
+    jq_gh: tuple[pathlib.Path, dict[str, str]], first_line: str, matches: bool
+) -> None:
+    directory, env = jq_gh
+    (directory / "comments.json").write_text(json.dumps([comment(42, "github-actions[bot]", f"{first_line}\nx")]))
+    result = post(directory, env, f"{MARKER}\nnew\n".encode())
+    assert result.returncode == 0, result.stderr
+    want = (
+        "PATCH repos/example-org/gt4py/issues/comments/42"
+        if matches
+        else "POST repos/example-org/gt4py/issues/9/comments"
+    )
+    assert (directory / "requests.log").read_text() == want + "\n"
