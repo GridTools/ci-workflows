@@ -19,6 +19,7 @@ def fake_gh(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.
         'printf "%s\\n" "$@" >"${FAKE_DIR}/args"\n'
         'cat >"${FAKE_DIR}/stdin"\n'
         '[ -z "${FAKE_FAIL:-}" ] || { echo "HTTP 502" >&2; exit 1; }\n'
+        '[ -z "${FAKE_WARN:-}" ] || echo "warning" >&2\n'
         "echo answer\n"
     )
     script.chmod(0o755)
@@ -56,6 +57,17 @@ def test_failure(fake_gh: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None
     with pytest.raises(runner.CommandError) as e:
         gh.api("repos/o/r/pulls/7")
     assert e.value.stderr == b"HTTP 502\n"
+
+
+def test_stderr_on_success(fake_gh: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_WARN", "1")
+    assert gh.api("repos/o/r/pulls/7") == b"answer\n"
+    with pytest.raises(runner.CommandError, match="output on stderr") as e:
+        gh.api("repos/o/r/pulls/7", stderr_is_error=True)
+    assert e.value.returncode == 0
+    assert e.value.stderr == b"warning\n"
+    monkeypatch.delenv("FAKE_WARN")
+    assert gh.api("repos/o/r/pulls/7", stderr_is_error=True) == b"answer\n"
 
 
 @pytest.mark.parametrize(
