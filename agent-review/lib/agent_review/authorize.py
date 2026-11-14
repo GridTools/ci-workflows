@@ -213,7 +213,7 @@ def read_two_fields(text: str) -> tuple[str, str]:
     (CR, VT, FF) is not a separator and stays in the fields.
     """
     line = text.split("\n", 1)[0].strip(IFS_BLANKS)
-    m = re.match(r"([^ \t]*)[ \t]*(.*)", line, re.ASCII | re.DOTALL)
+    m = re.fullmatch(r"([^ \t]*)[ \t]*(.*)", line, re.ASCII | re.DOTALL)
     assert m is not None  # noqa: S101 (the pattern matches every string)
     return m.group(1), m.group(2)
 
