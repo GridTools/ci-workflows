@@ -106,10 +106,10 @@ def read_expected(name: str, src_fd: int) -> bytes | None:
             return None
         return files.read_bytes(name, MAX_BYTES, dir_fd=src_fd, single_link=True)
     except files.UnsafeFileError as e:
-        if e.reason == "links":
+        if e.reason == "links" and e.st is not None:
             # A hard link could expose a host file the agent cannot read itself.
             _warn(f"'{name}' has {e.st.st_nlink} hard links; skipped.")
-        elif e.reason == "size":
+        elif e.reason == "size" and e.st is not None:
             _warn(f"'{name}' is {e.st.st_size} bytes, over the {MAX_BYTES}-byte limit; skipped.")
         elif e.reason == "grew":
             _warn(f"'{name}' grew over the {MAX_BYTES}-byte limit while reading; skipped.")

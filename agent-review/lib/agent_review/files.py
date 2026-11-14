@@ -23,10 +23,11 @@ class UnsafeFileError(OSError):
     ``reason`` says which check failed, so that callers need not parse the
     message: ``"type"`` (not a regular file), ``"links"`` (more than one
     hard link), ``"size"`` (``fstat`` size over the cap) or ``"grew"`` (the
-    read went past the cap). ``st`` is the ``fstat`` result of the open file.
+    read went past the cap); ``"other"`` if the raiser did not say. ``st`` is
+    the ``fstat`` result of the open file, if there was one.
     """
 
-    def __init__(self, message: str, reason: str, st: os.stat_result) -> None:
+    def __init__(self, message: str, reason: str = "other", st: os.stat_result | None = None) -> None:
         super().__init__(message)
         self.reason = reason
         self.st = st
