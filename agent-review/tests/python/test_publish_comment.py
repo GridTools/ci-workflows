@@ -58,13 +58,34 @@ def test_render_invalid_utf8() -> None:
 
 
 @pytest.mark.parametrize(
-    ("size", "noted"),
-    [(59999, False), (60000, True), (60001, True)],
+    ("review", "noted"),
+    [
+        (b"x" * 59999, False),
+        # Exactly the cap and not cut: no note (bash noted it).
+        (b"x" * 60000, False),
+        (b"x" * 60000 + b"\n", False),
+        (b"x" * 60001, True),
+        # Grows past the cap through escaping, cut: noted (bash did not).
+        (b"xx" + b"@a" * 12000, True),
+        # Larger than the cap only because of dropped characters: not cut.
+        (b"ok\n" + "\u200b".encode() * 30000, False),
+    ],
+    ids=["below", "at-cap", "at-cap-newline", "above", "grows-past-cap", "dropped-only"],
 )
-def test_render_truncation_note(size: int, noted: bool) -> None:
-    body = render(b"x" * size)
+def test_render_truncation_note(review: bytes, noted: bool) -> None:
+    """The note appears if and only if the sanitised review was cut."""
+    body = render(review)
     assert (b"_[Truncated to 60000 bytes.]_" in body) is noted
     assert len(body) <= pc.BODY_MAX_BYTES
+    assert sanitize.sanitize_and_report(review)[1] is noted
+
+
+def test_render_cut_keeps_every_mention_neutralised() -> None:
+    body = render(b"xx" + b"@a" * 12000).decode()
+    text = body.split("\n\n", 1)[1].split("\n\n_[Truncated")[0]
+    # Cut after a whole '@' ZWJ unit at most: never a bare '@'.
+    assert text.endswith(("a", "@\u200d"))
+    assert text.count("@") == text.count("@\u200d")
 
 
 def test_render_body_fits_github_for_any_review() -> None:

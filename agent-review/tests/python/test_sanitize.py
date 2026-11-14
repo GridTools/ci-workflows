@@ -145,9 +145,46 @@ def test_cut_on_character_boundary(char: str, cap: int) -> None:
 
 
 def test_sanitize_caps_after_escaping() -> None:
-    out = sanitize.sanitize(b"@a" * 40000)
+    out, cut = sanitize.sanitize_and_report(b"@a" * 40000)
+    assert cut
     assert len(out) <= sanitize.REVIEW_MAX_BYTES
     out.decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("text", "units"),
+    [
+        ("x@a", ["@\u200d"]),
+        ("x<!", ["<\u200b"]),
+        ("x<?", ["<\u200b"]),
+        ("x-->", ["--\u200b"]),
+        ("x--->", ["--\u200b"]),
+        ("x]:", ["]\u200b"]),
+        ("x&#1", ["&amp;#\u200b"]),
+        ("x&lt;", ["&amp;"]),
+    ],
+)
+def test_cut_never_splits_a_neutralisation(text: str, units: list[str]) -> None:
+    """Every cap: the cut keeps a neutralisation whole or drops all of it."""
+    full = sanitize.clean(text)
+    data = full.encode()
+    for cap in range(len(data) + 1):
+        out = sanitize.cut(data, cap).decode()
+        assert full.startswith(out)
+        for unit in units:
+            start = full.index(unit)
+            assert len(out) <= start or len(out) >= start + len(unit), (cap, out)
+
+
+def test_reported_cut_is_exact() -> None:
+    assert sanitize.sanitize_and_report(b"x" * 10, 10) == (b"x" * 10, False)
+    assert sanitize.sanitize_and_report(b"x" * 11, 10) == (b"x" * 10, True)
+    assert sanitize.sanitize_and_report(b"@a", 3) == (b"", True)
+    assert sanitize.sanitize_and_report(b"@a", 4) == ("@\u200d".encode(), True)
+    # Only trailing newlines lost: no content was cut.
+    assert sanitize.sanitize_and_report(b"xx\n\n", 2) == (b"xx", False)
+    assert sanitize.sanitize_and_report(b"xx\n\ny", 2) == (b"xx", True)
+    assert sanitize.sanitize_and_report("\u200b".encode() * 10 + b"x", 2) == (b"x", False)
 
 
 # --- Property tests ------------------------------------------------------------------
@@ -229,15 +266,40 @@ def test_property_random_adversarial(seed: int) -> None:
         check_output(sanitize.clean(text), at_end_only_if_cut=False)
 
 
+# Independent of the module: what each neutralisation inserts, with the
+# character(s) it protects.
+UNIT = re.compile("&amp;#\u200b|&amp;|<\u200b|--\u200b|\\]\u200b|@\u200d")
+
+
+def legal_cuts(full: str) -> list[int]:
+    """Byte offsets where ``full`` may be cut: character boundaries outside every unit."""
+    inside = {i for m in UNIT.finditer(full) for i in range(m.start() + 1, m.end())}
+    offsets, pos = [], 0
+    for i, c in enumerate(full):
+        if i not in inside:
+            offsets.append(pos)
+        pos += len(c.encode())
+    offsets.append(pos)
+    return offsets
+
+
 @pytest.mark.parametrize("seed", range(5))
 def test_property_with_the_cap(seed: int) -> None:
+    """At every cap: the longest legal prefix, reported as cut exactly when it is."""
     rng = random.Random(1000 + seed)  # noqa: S311 (reproducible test inputs)
-    for _ in range(50):
+    for _ in range(40):
         text = random_text(rng)
-        data = text.encode()
-        for cap in sorted({0, 1, len(data) // 2, len(data) - 1, len(data)} - {-1}):
-            out = sanitize.sanitize(data, cap).decode("utf-8")
-            check_output(out, at_end_only_if_cut=True)
+        full = sanitize.clean(text)
+        data = full.encode()
+        legal = legal_cuts(full)
+        for cap in range(len(data) + 1):
+            out = sanitize.cut(data, cap)
+            assert len(out) == max(o for o in legal if o <= cap)
+            check_output(out.decode("utf-8"), at_end_only_if_cut=True)
+        for cap in (0, len(data) // 2, len(data) - 1, len(data)):
+            if cap >= 0:
+                out, cut = sanitize.sanitize_and_report(text.encode(), cap)
+                assert cut is (len(data.rstrip(b"\n")) > len(out))
 
 
 @pytest.mark.parametrize("seed", range(5))

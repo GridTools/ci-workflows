@@ -91,10 +91,10 @@ def check_label(what: str, value: str) -> str:
     return value
 
 
-def sanitize_review(data: bytes) -> bytes:
-    """The sanitised review, or Failure(code 3) if it is not valid UTF-8."""
+def sanitize_review(data: bytes) -> tuple[bytes, bool]:
+    """(the sanitised review, whether the cap cut it), or Failure(code 3) if it is not valid UTF-8."""
     try:
-        return sanitize.sanitize(data)
+        return sanitize.sanitize_and_report(data)
     except sanitize.InvalidReviewError as e:
         raise Failure(str(e), EXIT_INVALID) from e
 
@@ -103,15 +103,15 @@ def cmd_sanitize() -> bytes:
     data = sys.stdin.buffer.read(INPUT_MAX_BYTES + 1)
     if len(data) > INPUT_MAX_BYTES:
         raise Failure(f"The review exceeds {INPUT_MAX_BYTES} bytes.")
-    return sanitize_review(data)
+    return sanitize_review(data)[0]
 
 
 def render(*, harness: str, version: str, model: str, head_sha: str, run_url: str, review: bytes) -> bytes:
     """The comment body for ``review`` (raw bytes), as UTF-8."""
     # The bash version took the sanitised text through '$(...)', which drops
-    # trailing newlines, and measured it in bytes (LC_ALL=C).
-    safe_bytes = sanitize_review(review).rstrip(b"\n")
-    safe = safe_bytes.decode("utf-8", errors="strict")
+    # trailing newlines.
+    safe_bytes, cut = sanitize_review(review)
+    safe = safe_bytes.rstrip(b"\n").decode("utf-8", errors="strict")
     if not safe.strip(ASCII_WHITESPACE):
         raise Failure("the review is empty.", EXIT_INVALID)
     lines = [
@@ -124,7 +124,10 @@ def render(*, harness: str, version: str, model: str, head_sha: str, run_url: st
         safe,
     ]
     body = "\n".join(lines) + "\n"
-    if len(safe_bytes) >= sanitize.REVIEW_MAX_BYTES or len(review) > sanitize.REVIEW_MAX_BYTES:
+    # Noted if and only if the cap cut the sanitised text (also when escaping
+    # made it grow past the cap; not when only dropped characters made the
+    # input larger than the cap).
+    if cut:
         body += f"\n_[Truncated to {sanitize.REVIEW_MAX_BYTES} bytes.]_\n"
     return body.encode("utf-8", errors="strict")
 

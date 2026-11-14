@@ -21,7 +21,8 @@ posted with a write token:
   invisible characters, and numeric ones (``&#64;``), with a ZWSP after the
   ``#`` so that the escaped form is no issue reference like ``#64``;
 - ``@mentions`` get a zero-width joiner (ZWJ) after the ``@``;
-- the result is cut to ``REVIEW_MAX_BYTES`` on a character boundary.
+- the result is cut to ``REVIEW_MAX_BYTES``, never inside a character or
+  a neutralisation (``@`` and its ZWJ, ``&amp;``, ...).
 
 The invisible characters go first, so removing them cannot join a delimiter
 that a later replacement would miss (``<`` U+200B ``!--``). The later
@@ -101,14 +102,36 @@ def clean(text: str) -> str:
     return neutralise(drop_invisible(text))
 
 
+# What a neutralisation inserts, with the character(s) it protects: a cut
+# never falls inside one, so the cut text never ends with a bare '@', '<',
+# ']' or '--', or with part of '&amp;'. Every ZWSP and ZWJ in the cleaned
+# text was inserted (the input's are dropped), and so was every '&amp;'
+# (an '&amp;' in the input becomes '&amp;amp;').
+# Longest first: '&amp;#' ZWSP before '&amp;'.
+_UNITS = re.compile(
+    "|".join(re.escape(u) for u in (f"&amp;#{ZWSP}", "&amp;", f"<{ZWSP}", f"--{ZWSP}", f"]{ZWSP}", f"@{ZWJ}")).encode()
+)
+_UNIT_MAX_BYTES = len(f"&amp;#{ZWSP}".encode())
+
+
 def cut(data: bytes, max_bytes: int) -> bytes:
-    """``data`` (valid UTF-8) cut to at most ``max_bytes``, never inside a character."""
+    """``data`` (cleaned, valid UTF-8) cut to at most ``max_bytes``.
+
+    Never inside a character, and never inside a neutralisation (``_UNITS``):
+    the cut backs off to the start of either.
+    """
     if len(data) <= max_bytes:
         return data
     end = max_bytes
     # Back off over continuation bytes to the start of the cut character.
     while end > 0 and data[end] & 0xC0 == 0x80:
         end -= 1
+    # A unit that contains the cut starts at most _UNIT_MAX_BYTES - 1 before it.
+    base = max(0, end - _UNIT_MAX_BYTES)
+    for m in _UNITS.finditer(data, base, end + _UNIT_MAX_BYTES):
+        if m.start() < end < m.end():
+            end = m.start()
+            break
     return data[:end]
 
 
@@ -120,9 +143,21 @@ def decode(data: bytes) -> str:
         raise InvalidReviewError("the review is not valid UTF-8.") from e
 
 
+def sanitize_and_report(data: bytes, max_bytes: int = REVIEW_MAX_BYTES) -> tuple[bytes, bool]:
+    """(the sanitised review as UTF-8 bytes of at most ``max_bytes``, whether the cap cut content).
+
+    The flag is false when the cap removed only trailing newlines, which
+    ``render`` drops anyway. Raises InvalidReviewError if ``data`` is not
+    valid UTF-8.
+    """
+    cleaned = clean(decode(data)).encode("utf-8", errors="strict")
+    out = cut(cleaned, max_bytes)
+    return out, cleaned[len(out) :].rstrip(b"\n") != b""
+
+
 def sanitize(data: bytes, max_bytes: int = REVIEW_MAX_BYTES) -> bytes:
     """The sanitised review, as UTF-8 bytes of at most ``max_bytes``.
 
     Raises InvalidReviewError if ``data`` is not valid UTF-8.
     """
-    return cut(clean(decode(data)).encode("utf-8", errors="strict"), max_bytes)
+    return sanitize_and_report(data, max_bytes)[0]
