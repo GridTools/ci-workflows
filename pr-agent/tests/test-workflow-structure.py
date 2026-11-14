@@ -119,6 +119,17 @@ def main() -> int:
     check("always()" in report["if"] and "needs.authorize.outputs.result == 'incomplete'" in report["if"],
           "'report' runs after a failed 'pr-agent' job, never after a dry run or a refusal")
 
+    check(report.get("concurrency") == {"group": "pr-agent-report-${{ needs.authorize.outputs.pr }}",
+                                         "cancel-in-progress": False},
+          "'report' is serialized per pull request, never cancelled in progress")
+    check(jobs["authorize"]["outputs"]["result"]
+          == "${{ (steps.auth.outputs.allowed != 'true' || steps.models.outcome == 'success') && steps.auth.outputs.result || '' }}",
+          "'authorize' reports no result if 'Resolve models' failed")
+    # PyYAML reads the key "on" as True.
+    result = workflow[True]["workflow_call"]["outputs"]["result"]["value"]
+    check("jobs.pr-agent.outputs.outcome == 'success'" in result and "jobs.pr-agent.outputs.outcome == 'failure'" in result,
+          "the workflow's result passes on only the step's 'success' and 'failure'")
+
     for job_id, job in jobs.items():
         permissions = job.get("permissions")
         check(isinstance(permissions, dict), f"job '{job_id}' sets its permissions explicitly")

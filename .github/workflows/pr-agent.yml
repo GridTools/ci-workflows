@@ -70,8 +70,10 @@ on:
         required: false
     outputs:
       result:
-        description: "success or failure (the PR Agent step), dry-run, skipped, incomplete (the PR Agent job did not finish), or '' on an error in 'authorize'"
-        value: ${{ jobs.pr-agent.outputs.outcome || jobs.authorize.outputs.result }}
+        description: "success or failure (the PR Agent step), dry-run, skipped, incomplete (the PR Agent step did not run or finish), or '' on an error in 'authorize'"
+        # Only the step's own outcomes; 'skipped' (a failed key check) or ''
+        # falls back to 'incomplete' from 'authorize'.
+        value: ${{ (jobs.pr-agent.outputs.outcome == 'success' || jobs.pr-agent.outputs.outcome == 'failure') && jobs.pr-agent.outputs.outcome || jobs.authorize.outputs.result }}
 
 permissions: {}
 
@@ -104,7 +106,8 @@ jobs:
       pull-requests: read
     outputs:
       allowed: ${{ steps.auth.outputs.allowed }}
-      result: ${{ steps.auth.outputs.result }}
+      # Empty if 'Resolve models' failed: an error in this job.
+      result: ${{ (steps.auth.outputs.allowed != 'true' || steps.models.outcome == 'success') && steps.auth.outputs.result || '' }}
       dry_run: ${{ steps.auth.outputs.dry_run }}
       pr: ${{ steps.auth.outputs.pr }}
       api_base: ${{ steps.auth.outputs.api_base }}
@@ -256,6 +259,12 @@ jobs:
     # Also after a failed 'pr-agent' job (environment denial, image pull,
     # missing key); bin/report-outcome decides.
     if: always() && needs.authorize.outputs.result == 'incomplete'
+    # Comment runs have their own concurrency groups in the caller, so two
+    # reports on one PR could otherwise both create a comment, or delete the
+    # one the other updates. Only this job is serialized, not PR Agent.
+    concurrency:
+      group: pr-agent-report-${{ needs.authorize.outputs.pr }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

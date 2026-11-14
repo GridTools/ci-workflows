@@ -68,7 +68,7 @@ Every value is validated, fail-closed, in the keyless `authorize` job by [`bin/a
 | `dry_run` | `false` | run `authorize` and `Resolve models` only: no key, no environment, nothing posted |
 | `test_pr` | `""` | self-test of this repository only (`owner/repo#number`); rejected for any other caller |
 
-**Secret**: `inference_api_key`. It must be an **environment** secret: `authorize`, which has no environment, fails if the mapped name resolves there. **Output**: `result`: `success` or `failure` (the PR Agent step), `dry-run`, `skipped` (not authorized, or not an event for PR Agent), `incomplete` (the `pr-agent` job did not finish, for example an environment denial), or empty on an error in `authorize`.
+**Secret**: `inference_api_key`. It must be an **environment** secret: `authorize`, which has no environment, fails if the mapped name resolves there. **Output**: `result`: `success` or `failure` (the PR Agent step), `dry-run`, `skipped` (not authorized, or not an event for PR Agent), `incomplete` (the PR Agent step did not run or finish, for example an environment denial or a missing key), or empty on an error in `authorize`.
 
 **Which inputs may come from repository variables**: `model`, `fallback_models` and the three limits, so they can be changed without a PR; they are validated and the key's own restrictions bound them. **Never** map `environment`, `api_base` or `docs_url` from a variable, a dispatch input or the event: whoever can change a variable needs no review.
 
@@ -97,7 +97,7 @@ Before merging the caller, its plumbing can be tested in [caller test mode](#cal
 | --- | --- | --- |
 | `authorize` | read token, **no secrets**, no environment | Fetches [`pr-agent/`](../pr-agent/) from this workflow's own commit (`job.workflow_repository`@`job.workflow_sha`), runs [`bin/authorize`](../pr-agent/bin/authorize) (inputs, event rules, [`bin/check-command`](../pr-agent/bin/check-command), the writer check, fail-closed on API errors) and [`bin/resolve-models`](../pr-agent/bin/resolve-models) (model chain, limits, step timeout). |
 | `pr-agent` | the key (caller's environment), write token for issues and PRs | Only if authorized and not a dry run. Checks that the key arrived, then runs the image pinned by digest with `continue-on-error` and the derived step timeout. No checkout and no script of ours. |
-| `report` | write token, **no secrets** | After `pr-agent`, even if that job failed: [`bin/report-outcome`](../pr-agent/bin/report-outcome) posts or updates one failure comment (marker `<!-- pr-agent-run-failed -->`), deleting older duplicates, or deletes them all after a success. A cancelled run reports nothing. |
+| `report` | write token, **no secrets** | After `pr-agent`, even if that job failed: [`bin/report-outcome`](../pr-agent/bin/report-outcome) posts or updates one failure comment (marker `<!-- pr-agent-run-failed -->`), deleting older duplicates, or deletes them all after a success. A cancelled run reports nothing. Serialized per PR (its own concurrency group, never cancelled in progress), so overlapping runs cannot duplicate the comment; of several queued reports, GitHub keeps only the newest. |
 
 The failure comment exists because a run started by a comment attaches its check to the default branch's head, never to the PR, and an automatic run's check is green with only an annotation. Since `report` is a separate job, it also covers failures before PR Agent starts (environment denial, image pull, missing key), which an in-job step could not.
 
