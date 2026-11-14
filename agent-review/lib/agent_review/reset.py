@@ -31,6 +31,7 @@ directory may be a symlink (``verify_followed_files``).
 import os
 import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -395,6 +396,24 @@ def _resolve_base_link(git: Git, repo_dir: str, base_sha: str, path: str, seen: 
     return "/".join(current)
 
 
+def directory_target_specs(patterns: Iterable[str]) -> list[str]:
+    """Pathspecs of the directories whose whole content the reset covers: each directory pattern ``D/``.
+
+    ``D`` itself and everything below it. Never the leading directories of
+    a file pattern (``container_specs``): only the file is reset there, not
+    the rest of the directory.
+    """
+    dirs = [p for p in patterns if p.endswith("/")]
+    return [*pathspecs(dirs), *(f":(glob,icase)**/{d.rstrip('/')}" for d in dirs)]
+
+
+def _is_directory(repo_dir: str, path: str) -> bool:
+    try:
+        return stat.S_ISDIR(os.lstat(os.path.join(repo_dir, path)).st_mode)
+    except FileNotFoundError:
+        return False
+
+
 def verify_no_linked_directories(
     git: Git,
     repo_dir: str,
@@ -404,41 +423,60 @@ def verify_no_linked_directories(
     scratch_parent: str,
     env: Mapping[str, str],
 ) -> None:
-    """Fails closed on a symlink or a gitlink at or below a directory a pattern names.
+    """Fails closed on a symlink or a gitlink that could expose files the reset does not cover.
 
-    The post-condition of the reset for directories, checked on the result:
-    at any depth and case-insensitively, a path that a directory pattern
-    matches, or a directory a pattern goes through, must not be a gitlink,
-    nor a symlink, with one exception, for bases that link one
-    instruction directory into another ('.claude/skills ->
-    ../.agents/skills'): a symlink passes if (1) it is
-    the base's own (same target as in the base commit), (2) its target is
-    relative, climbs only through leading '..' and stays inside the
-    repository, (3) every symlink on the way to the target passes (1) and
-    (2) as well, at most MAX_LINK_HOPS of them and without a cycle, and (4)
-    the reset patterns match the real path it leads to, so that is reset
-    too. A PR's symlink never qualifies, and a base symlink to anything else
-    could expose files the PR changes. Matching is git's (scratch indexes).
+    The post-condition of the reset for links, checked on the result: at
+    any depth and case-insensitively, a path that a reset pattern matches
+    (an instruction file, a rule file, or anything below a directory
+    pattern), a directory pattern's directory itself, or a directory a
+    pattern goes through, must not be a gitlink, nor a symlink, with one
+    exception, for bases that link one instruction file or directory to
+    another ('.claude/skills -> ../.agents/skills', 'AGENTS.md ->
+    CLAUDE.md'): a symlink passes if (1) it is the base's own (same target
+    as in the base commit), (2) its target is relative, climbs only through
+    leading '..' and stays inside the repository, (3) every symlink on the
+    way to the target passes (1) and (2) as well, at most MAX_LINK_HOPS of
+    them and without a cycle, and (4) the reset covers the real path it
+    leads to: a file must match a reset pattern itself; a directory must be
+    a directory pattern's directory or lie below one (never merely a
+    directory a file pattern goes through, whose other files are not
+    reset). A PR's symlink never qualifies (the reset replaces it), and a
+    base symlink to anything else would let the agent read files the PR
+    changes. Matching is git's (scratch indexes).
     """
     linked = _linked_paths(git, repo_dir)
-    directory_specs = [*pathspecs(p for p in patterns if p.endswith("/")), *container_specs(patterns)]
-    if not linked or not directory_specs:
+    if not linked:
         return
-    reset_specs = [*pathspecs(patterns), *container_specs(patterns)]
+    link_specs = [*pathspecs(p for p in patterns if p.endswith("/")), *container_specs(patterns)]
+    file_specs = pathspecs(patterns)
+    dir_specs = directory_target_specs(patterns)
+    refused: list[tuple[str, str | None]] = []
     with Coverage(scratch_parent, env, ()) as coverage:
         try:
-            refused = []
-            for path in coverage.matching(linked, directory_specs):
+            for path in coverage.matching(linked, link_specs):
                 target = _resolve_base_link(git, repo_dir, base_sha, path, [])
-                if target is None or not coverage.matching([target], reset_specs):
-                    refused.append(path)
+                if target is None:
+                    refused.append((path, None))
+                    continue
+                specs = dir_specs if _is_directory(repo_dir, target) else file_specs
+                if not coverage.matching([target], specs):
+                    refused.append((path, target))
         except runner.CommandError as e:
             raise Fatal(f"Could not check the symlinks and gitlinks of the checkout: {e}.") from e
-    if refused:
+    if not refused:
+        return
+    path, target = refused[0]
+    count = f"({len(refused)} such path(s))"
+    if target is None:
         raise Fatal(
-            f"'{refused[0]}' is a symlink or a gitlink where the reset expects an instruction directory"
-            f" or a directory leading to an instruction file ({len(refused)} such path(s))."
+            f"'{path}' is a symlink or a gitlink where the reset expects an instruction file or directory,"
+            f" or a directory leading to an instruction file {count}."
         )
+    wanted = f"{target}/" if _is_directory(repo_dir, target) else target
+    raise Fatal(
+        f"'{path}' is a symlink in the base commit to '{target}', which the reset does not cover, so the agent"
+        f" would read the pull request's version {count}; add '{wanted}' to instruction_files to review it."
+    )
 
 
 def _parse_ls_tree(listing: bytes) -> tuple[str, str, str, str] | None:

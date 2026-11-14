@@ -535,7 +535,10 @@ def test_linked_directory_post_condition_with_the_reset_subverted(tmp_path: path
     log = result.stdout.decode()
     assert result.returncode == 1, log
     assert "git shim: skipped" in log
-    assert "run-review: '.opencode' is a symlink or a gitlink where the reset expects an instruction directory" in log
+    assert (
+        "run-review: '.opencode' is a symlink or a gitlink where the reset expects an instruction file or directory"
+        in log
+    )
     assert not (ws / "prompt.md").exists()
 
 
@@ -555,7 +558,7 @@ def test_linked_directory_from_the_base_fails_closed(
     """A base symlink there could point at files the PR changes: the run stops too."""
     ws, log = fetch(tmp_path, upstream, fork, {"src/code.py": "x = 2\n"})
     assert log.endswith("exit 1"), log
-    assert "is a symlink or a gitlink where the reset expects" in log
+    assert REFUSED.search(log), log
     assert not (ws / "prompt.md").exists()
 
 
@@ -570,6 +573,11 @@ def test_base_symlink_into_a_reset_directory_passes(
     repo = ws / "repo"
     assert os.readlink(repo / ".claude" / "skills") == "../.agents/skills"
     assert (repo / ".claude" / "skills" / "s.md").read_text() == "base skill\n"
+
+
+# The two refusals of the link post-condition: a link that is not the base's
+# own safe symlink, and a base symlink to a path the reset does not cover.
+REFUSED = re.compile(r"is a symlink or a gitlink where the reset expects|which the reset does not cover")
 
 
 def chain(hops: int) -> dict[str, str]:
@@ -601,7 +609,7 @@ def test_base_symlink_chains(tmp_path: pathlib.Path, upstream: Upstream, links: 
         assert (ws / "repo" / ".claude" / "skills" / "s.md").read_text() == "base skill\n"
     else:
         assert log.endswith("exit 1"), log
-        assert "is a symlink or a gitlink where the reset expects" in log
+        assert REFUSED.search(log), log
         assert not (ws / "prompt.md").exists()
 
 
@@ -658,3 +666,114 @@ def test_truncation_is_decided_from_the_bytes_read(tmp_path: pathlib.Path, monke
     review, truncated = run_review.read_review(str(path)) or (b"", False)
     assert truncated
     assert review.endswith(run_review.TRUNCATION_NOTE)
+
+
+# --- Base symlinks to paths the reset does not cover (integration review F2) ---------------
+
+UNCOVERED = "which the reset does not cover, so the agent would read the pull request's version"
+
+
+def assert_stopped(ws: pathlib.Path, log: str) -> None:
+    assert log.endswith("exit 1"), log
+    assert not (ws / "prompt.md").exists()
+    # The followed-files summary is printed only once every post-condition holds.
+    assert "are their base versions" not in log
+
+
+@pytest.mark.parametrize(
+    ("fork", "head", "root_args", "message"),
+    [
+        # F2: a directory link whose target is only a directory a FILE pattern
+        # goes through ('.github' for '.github/copilot-instructions.md'): the
+        # files below it other than that one are not reset.
+        (
+            {".github/x/SKILL.md": "base\n", ".claude/skills": "-> ../.github"},
+            {".github/x/SKILL.md": "PR EVIL\n"},
+            {},
+            "'.claude/skills' is a symlink in the base commit to '.github', " + UNCOVERED,
+        ),
+        # The same through the directory of a rule file.
+        (
+            {"docs/x/SKILL.md": "base\n", ".claude/skills": "-> ../docs"},
+            {"docs/x/SKILL.md": "PR EVIL\n"},
+            {"rules": "docs/RULES.md\n"},
+            "add 'docs/' to instruction_files",
+        ),
+        # Caller patterns with a wildcard directory segment.
+        (
+            {"skills/x/SKILL.md": "base\n", ".claude/skills": "-> ../skills"},
+            {"skills/x/SKILL.md": "PR EVIL\n"},
+            {"extra": "*/x.md\n"},
+            UNCOVERED,
+        ),
+        (
+            {"docs/skills/x/SKILL.md": "base\n", ".claude/skills": "-> ../docs/skills"},
+            {"docs/skills/x/SKILL.md": "PR EVIL\n"},
+            {"extra": "docs/**/x.md\n"},
+            UNCOVERED,
+        ),
+        (
+            {"guides/skills/x/SKILL.md": "base\n", ".claude/skills": "-> ../guides/skills"},
+            {"guides/skills/x/SKILL.md": "PR EVIL\n"},
+            {"extra": "guides/*/README.md\n"},
+            UNCOVERED,
+        ),
+    ],
+)
+def test_base_symlink_to_an_uncovered_path_fails_closed(  # noqa: PLR0917 (pytest parameters)
+    tmp_path: pathlib.Path,
+    upstream: Upstream,
+    fork: dict[str, str],
+    head: dict[str, str | None],
+    root_args: dict[str, str],
+    message: str,
+) -> None:
+    ws, log = fetch(tmp_path, upstream, {**FORK, **fork}, head, **root_args)
+    assert_stopped(ws, log)
+    assert message in log, log
+
+
+@pytest.mark.parametrize("extra", ["*/x.md\n", "docs/**/x.md\n", "guides/*/README.md\n", "skills/README.md\n"])
+def test_existing_case_fails_closed_under_wildcard_caller_patterns(
+    tmp_path: pathlib.Path, upstream: Upstream, extra: str
+) -> None:
+    """'.claude/skills -> ../skills' must fail whatever the caller's patterns (it passed under '*/x.md')."""
+    fork = {**FORK, "skills/s.md": "x\n", ".claude/settings.json": "{}\n", ".claude/skills": "-> ../skills"}
+    ws, log = fetch(tmp_path, upstream, fork, {"skills/s.md": "PR\n"}, extra=extra)
+    assert_stopped(ws, log)
+    assert UNCOVERED in log, log
+
+
+@pytest.mark.parametrize(
+    ("fork", "head", "root_args", "link", "content"),
+    [
+        (
+            {"docs/x/SKILL.md": "base\n", ".claude/skills": "-> ../docs"},
+            {"docs/x/SKILL.md": "PR EVIL\n"},
+            {"extra": "docs/\n"},
+            ".claude/skills/x/SKILL.md",
+            "base\n",
+        ),
+        # The self-test fixture's layout: a directory pattern's subdirectory.
+        (
+            {".agents/skills/s/SKILL.md": "base skill\n", ".claude/skills": "-> ../.agents/skills"},
+            {".agents/skills/s/SKILL.md": "PR EVIL\n"},
+            {},
+            ".claude/skills/s/SKILL.md",
+            "base skill\n",
+        ),
+    ],
+)
+def test_base_symlink_to_a_covered_path_passes(  # noqa: PLR0917 (pytest parameters)
+    tmp_path: pathlib.Path,
+    upstream: Upstream,
+    fork: dict[str, str],
+    head: dict[str, str | None],
+    root_args: dict[str, str],
+    link: str,
+    content: str,
+) -> None:
+    ws, log = fetch(tmp_path, upstream, {**FORK, **fork}, head, **root_args)
+    assert log.endswith("exit 0"), log
+    assert (ws / "repo" / link).read_text() == content
+    assert (ws / "prompt.md").exists()

@@ -243,10 +243,8 @@ class Run:
             patterns=self.config.reset_patterns,
             context_dir=self.context_dir,
         )
-        say(
-            reset.verify_followed_files(
-                git, self.repo_dir, p.base_sha, self.config.rule_files, self.config.addendum_named
-            )
+        followed = reset.verify_followed_files(
+            git, self.repo_dir, p.base_sha, self.config.rule_files, self.config.addendum_named
         )
         reset.verify_no_linked_directories(
             git,
@@ -256,6 +254,10 @@ class Run:
             scratch_parent=self.ws,
             env=self.env,
         )
+        # Only once both post-conditions hold: a followed file that is a
+        # base symlink to a file the reset does not cover is its base
+        # version, but not its base content.
+        say(followed)
 
         # --- Render the prompt ---
         title, body = prompt.read_pr(os.path.join(self.in_dir, "pr.json"))
