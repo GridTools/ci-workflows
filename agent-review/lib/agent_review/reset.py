@@ -73,6 +73,23 @@ def read_list(path: str) -> list[str]:
     """Non-comment, trimmed lines of ``path``; none if it is not a file."""
     if not os.path.isfile(path):
         return []
+    return _list_entries(path)
+
+
+def read_central_list(path: str) -> list[str]:
+    """The central reset patterns: the file must exist and hold at least one pattern.
+
+    Unlike the caller's optional lists, a missing or empty central list is
+    a defect of the trusted tree, and treating it as "nothing configured"
+    would leave every harness's instruction files unreset (fail open).
+    """
+    entries = _list_entries(path)
+    if not entries:
+        raise Fatal(f"'{path}' holds no reset pattern.")
+    return entries
+
+
+def _list_entries(path: str) -> list[str]:
     entries = []
     for raw in read_config_file(path, LIST_MAX_BYTES).split(b"\n"):
         line = raw.strip(ASCII_SPACE)
@@ -122,7 +139,7 @@ def load_config(root: str) -> Config:
     # The central list (every harness's files), the caller's extra patterns,
     # and every rule file the prompt tells the agent to follow.
     patterns = [
-        *read_list(os.path.join(root, "instruction-files.txt")),
+        *read_central_list(os.path.join(root, "instruction-files.txt")),
         *read_list(os.path.join(config_dir, "extra-instruction-files.txt")),
         *rule_files,
     ]

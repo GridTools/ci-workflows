@@ -829,3 +829,24 @@ def test_base_symlink_to_a_covered_path_passes(  # noqa: PLR0917 (pytest paramet
     assert log.endswith("exit 0"), log
     assert (ws / "repo" / link).read_text() == content
     assert (ws / "prompt.md").exists()
+
+
+# --- The central reset list (final security review R1) ------------------------------------------
+
+
+@pytest.mark.parametrize("central", [None, "", "# comments only\n\n   \n"])
+def test_missing_or_empty_central_list_fails_closed(
+    tmp_path: pathlib.Path, upstream: Upstream, central: str | None
+) -> None:
+    """A packaging defect must not turn the reset off: the fetch stops before the prompt exists."""
+    _, base_sha, head_sha = upstream.make(FORK, {}, {".opencode/agent/x.md": "PR agent\n"})
+    root = make_root(tmp_path / "root", central=central if central is not None else "AGENTS.md\n")
+    if central is None:
+        (root / "instruction-files.txt").unlink()
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    result = run_entry(root, ["--phase", "fetch", str(ws)], env=upstream.env())
+    log = result.stdout.decode()
+    assert result.returncode == 1, log
+    expected = "Cannot read" if central is None else "holds no reset pattern"
+    assert expected in log and "instruction-files.txt" in log, log
+    assert not (ws / "prompt.md").exists()
