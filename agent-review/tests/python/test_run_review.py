@@ -11,7 +11,7 @@ import pathlib
 import re
 
 import pytest
-from run_review_fixtures import Upstream, make_root, make_ws, set_adapter
+from run_review_fixtures import Tree, Upstream, make_root, make_ws, set_adapter
 from run_review_fixtures import run_review as run_entry
 
 from agent_review import run_review
@@ -441,7 +441,7 @@ def real_tree(path: pathlib.Path) -> dict[str, str]:
 
 
 def fetch(
-    tmp_path: pathlib.Path, upstream: Upstream, fork: dict[str, str], head: dict[str, str | None], **root_args: object
+    tmp_path: pathlib.Path, upstream: Upstream, fork: Tree, head: Tree, **root_args: object
 ) -> tuple[pathlib.Path, str]:
     _, base_sha, head_sha = upstream.make(fork, {}, head)
     root = make_root(tmp_path / "root", **root_args)  # type: ignore[arg-type]
@@ -978,3 +978,43 @@ def test_refusal_reason_for_an_uncovered_target(tmp_path: pathlib.Path, upstream
     assert_stopped(ws, log)
     assert "'.claude/skills' is a symlink in the base commit to 'skills', " + UNCOVERED in log, log
     assert "add 'skills/' to instruction_files" in log, log
+
+
+# --- The PR's .gitattributes and the restored files (final security review R5) ----------------
+
+
+# The PR's own file in the encoding its attributes declare (git add decodes it).
+PR_UTF16 = "PR EVIL\n".encode("utf-16")
+
+
+@pytest.mark.parametrize(
+    ("attributes", "pr_file"),
+    [("AGENTS.md text eol=crlf\n", "PR EVIL\n"), ("AGENTS.md working-tree-encoding=UTF-16\n", PR_UTF16)],
+)
+def test_pr_gitattributes_on_a_rule_file_fails_closed(
+    tmp_path: pathlib.Path, upstream: Upstream, attributes: str, pr_file: str | bytes
+) -> None:
+    """The PR's attributes transform the restored rule file: it is not its base version, so the fetch stops."""
+    ws, log = fetch(tmp_path, upstream, FORK, {".gitattributes": attributes, "AGENTS.md": pr_file}, rules="AGENTS.md\n")
+    assert log.endswith("exit 1"), log
+    assert "Followed file 'AGENTS.md' is not its base version in the checkout" in log, log
+    assert not (ws / "prompt.md").exists()
+
+
+@pytest.mark.parametrize(
+    ("attributes", "pr_file", "decode"),
+    [
+        ("CLAUDE.md text eol=crlf\n", "PR EVIL\n", "utf-8"),
+        ("CLAUDE.md working-tree-encoding=UTF-16\n", PR_UTF16, "utf-16"),
+    ],
+)
+def test_pr_gitattributes_on_another_instruction_file_keeps_base_content(
+    tmp_path: pathlib.Path, upstream: Upstream, attributes: str, pr_file: str | bytes, decode: str
+) -> None:
+    """Not a rule file: the base text may be transformed by the PR's attributes, never replaced."""
+    fork = {**FORK, "CLAUDE.md": "base claude\n"}
+    ws, log = fetch(tmp_path, upstream, fork, {".gitattributes": attributes, "CLAUDE.md": pr_file})
+    assert log.endswith("exit 0"), log
+    data = (ws / "repo" / "CLAUDE.md").read_bytes()
+    assert b"PR EVIL" not in data and "PR EVIL".encode("utf-16-le") not in data
+    assert data.decode(decode).replace("\r\n", "\n") == "base claude\n"
