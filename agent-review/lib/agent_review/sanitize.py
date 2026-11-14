@@ -12,10 +12,15 @@ posted with a write token:
   ranges are kept although most of them are ``Cf``: variation selectors are
   ``Mn``, U+2065 is unassigned (``Cn``) in Python's Unicode 15.0, and the
   category of a character GitHub knows but Python does not is ``Cn``;
-- markup that GitHub renders as nothing is broken up with a zero-width
-  space (ZWSP): HTML comments (so the review cannot imitate the marker of
-  this workflow's comment), processing instructions (``<?``), declarations
-  and CDATA (``<!``), and link reference definitions (``[label]: url``);
+- no raw HTML can form: a zero-width space (ZWSP) follows every ``<``
+  that is followed by an ASCII letter, ``/``, ``!`` or ``?``, so there is
+  no tag, end tag, HTML block, comment (the review cannot imitate the
+  marker of this workflow's comment), processing instruction, declaration
+  or CDATA section. GitHub strips attributes and hides the contents of
+  some HTML; outside HTML, a named reference needs its ``;``. A ZWSP rather
+  than ``&lt;``: ``std::vector<int>`` in a code span stays readable;
+- comment ends (``-->``) and link reference definitions (``[label]: url``)
+  are broken up with a ZWSP too;
 - character references are escaped so they render literally: named ones
   (``&commat;``, ``&zwj;``, ``&rlm;``), which GitHub decodes into mentions or
   invisible characters, and numeric ones (``&#64;``), with a ZWSP after the
@@ -64,7 +69,8 @@ _DROPPED_BY_RANGE = re.compile(
 )
 
 # The replacements, in the order of the bash version's 'sed' chain.
-_PI_OR_DECLARATION = re.compile(r"<([!?])", re.ASCII)
+# The start of every raw HTML construct in GitHub's Markdown.
+_HTML_START = re.compile(r"<([A-Za-z/!?])", re.ASCII)
 _MENTION = re.compile(r"@([A-Za-z0-9])", re.ASCII)
 _NAMED_REFERENCE = re.compile(r"&([A-Za-z][A-Za-z0-9]*;)", re.ASCII)
 
@@ -89,7 +95,7 @@ def drop_invisible(text: str) -> str:
 
 def neutralise(text: str) -> str:
     """Breaks up hidden markup, escapes character references, neutralises mentions."""
-    text = _PI_OR_DECLARATION.sub(f"<{ZWSP}\\1", text)
+    text = _HTML_START.sub(f"<{ZWSP}\\1", text)
     text = text.replace("-->", f"--{ZWSP}>")
     text = text.replace("]:", f"]{ZWSP}:")
     text = _MENTION.sub(f"@{ZWJ}\\1", text)

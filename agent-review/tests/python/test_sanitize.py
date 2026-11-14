@@ -95,6 +95,8 @@ def test_explicit_ranges_match_the_bash_bytes() -> None:
         ("<!-- x -->", f"<{ZWSP}!-- x --{ZWSP}>"),
         ("<?php ?>", f"<{ZWSP}?php ?>"),
         ("<![CDATA[x]]>", f"<{ZWSP}![CDATA[x]]>"),
+        ('<b foo="TEXT">v</b>', f'<{ZWSP}b foo="TEXT">v<{ZWSP}/b>'),
+        ("std::vector<int> a < b <3 <-x <_", f"std::vector<{ZWSP}int> a < b <3 <-x <_"),
         ("--->", f"---{ZWSP}>"),
         ("[x]: https://e.org", f"[x]{ZWSP}: https://e.org"),
         ("@user @@a a@b.org @-x @ x", f"@{ZWJ}user @@{ZWJ}a a@{ZWJ}b.org @-x @ x"),
@@ -106,6 +108,30 @@ def test_explicit_ranges_match_the_bash_bytes() -> None:
 )
 def test_clean(text: str, want: str) -> None:
     assert sanitize.clean(text) == want
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Each rendered as nothing (or as an invisible soft hyphen) on GitHub
+        # before every '<' + letter, '/', '!' or '?' was broken up (checked
+        # with 'gh api markdown', render only).
+        '<b foo="TEXT">v</b>\n',
+        "<span>\n</span TEXT>\n",
+        "<div>\nA </1 TEXT> B\n</div>\n",
+        "<div>\nx&shyTEXT\n</div>\n",
+        "<details><summary>s</summary>TEXT</details>\n",
+        "<script>TEXT</script>\n<style>x</style>\n<pre>x</pre>\n<textarea>x</textarea>\n",
+        "<!DOCTYPE x>\n<![CDATA[TEXT]]>\n<?x TEXT?>\n<!-- TEXT -->\n",
+        "<a href='x' title='TEXT'>v</a> <img alt=TEXT src=x> <foo-bar>TEXT</foo-bar>\n",
+    ],
+)
+def test_no_raw_html_can_form(text: str) -> None:
+    out = sanitize.clean(text)
+    assert re.search(r"<[A-Za-z/!?]", out, re.ASCII) is None
+    # Visible text stays, with a ZWSP after each '<'. '&shy' without its ';'
+    # is not a reference outside HTML: GitHub shows it literally.
+    assert out.replace(ZWSP, "") == text
 
 
 def test_unicode_digits_and_letters_are_not_login_characters() -> None:
@@ -157,6 +183,8 @@ def test_sanitize_caps_after_escaping() -> None:
         ("x@a", ["@\u200d"]),
         ("x<!", ["<\u200b"]),
         ("x<?", ["<\u200b"]),
+        ("x<b", ["<\u200b"]),
+        ("x</", ["<\u200b"]),
         ("x-->", ["--\u200b"]),
         ("x--->", ["--\u200b"]),
         ("x]:", ["]\u200b"]),
@@ -195,6 +223,10 @@ ADVERSARIAL = [
     *"<!?->]:[@&#;aZ09 \t\n",
     "<!--",
     "-->",
+    "<b ",
+    "</",
+    "<div>\n",
+    "&shy",
     MARKER,
     "agent-review:stub -->",
     "&commat;",
@@ -235,7 +267,7 @@ def inserted_at(out: str, i: int) -> bool:
         return before.endswith("@") and (LOGIN_CHAR.fullmatch(after) is not None or after == "")
     if c == ZWSP:
         return (
-            (before.endswith("<") and after in ("!", "?", ""))
+            (before.endswith("<") and (re.fullmatch(r"[A-Za-z/!?]", after, re.ASCII) is not None or after == ""))
             or (before.endswith("--") and after in (">", ""))
             or (before.endswith("]") and after in (":", ""))
             or before.endswith("&amp;#")
@@ -246,15 +278,17 @@ def inserted_at(out: str, i: int) -> bool:
 def check_output(out: str, *, at_end_only_if_cut: bool) -> None:
     assert MARKER not in out
     assert "<!--" not in out and "-->" not in out
-    assert "<!" not in out and "<?" not in out and "]:" not in out
+    assert re.search(r"<[A-Za-z/!?]", out, re.ASCII) is None
+    assert "]:" not in out
     assert re.search(r"@[A-Za-z0-9]", out, re.ASCII) is None
     assert "&#" not in out
     assert all(m.group(0) == "&amp;" for m in NAMED_REF.finditer(out))
     for i, c in enumerate(out):
         if oracle_dropped(c):
             assert inserted_at(out, i), (f"U+{ord(c):04X}", i, out[max(0, i - 8) : i + 8])
-            # An inserted character with nothing after it only where the cap cut.
-            if not at_end_only_if_cut:
+            # An inserted character with nothing after it only where the cap
+            # cut, or after '&amp;#' (the review may end with '&#').
+            if not at_end_only_if_cut and not out[:i].endswith("&amp;#"):
                 assert i + 1 < len(out)
 
 
