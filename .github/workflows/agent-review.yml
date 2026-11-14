@@ -828,7 +828,7 @@ jobs:
         run: |
           case "${RESULT}" in
             missing) reason="the agent produced no review (fetch outcome '${FETCH_OUTCOME}', review outcome '${OUTCOME}', exit code '${EXIT_CODE}')" ;;
-            invalid) reason="the review was rejected as invalid (not UTF-8, or empty)" ;;
+            invalid) reason="the review was rejected as invalid (not UTF-8, empty, or not a regular file within the size cap)" ;;
           esac
           echo "::warning title=Agent review failed::No review was posted: ${reason}. See the 'Fetch the pull request in the sandbox' and 'Run the review in the sandbox' logs."
           {

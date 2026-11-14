@@ -128,17 +128,40 @@ def test_render_rejects(args: list[str], tmp_path: pathlib.Path) -> None:
 
 
 def test_render_review_file_must_be_regular(tmp_path: pathlib.Path) -> None:
+    """Unusable review files are an invalid result (3, a warning), not an error (1, a red run)."""
     real = tmp_path / "real.md"
     real.write_text("ok\n")
     link = tmp_path / "review.md"
     link.symlink_to(real)
     fifo = tmp_path / "fifo"
     os.mkfifo(fifo)
+    big = tmp_path / "big.md"
+    with big.open("wb") as f:
+        f.truncate(pc.INPUT_MAX_BYTES + 1)
     base = ["--harness", "stub", "--version", "v", "--model", "m", "--head-sha", SHA, "--run-url", RUN_URL]
-    for path in (link, fifo, tmp_path, tmp_path / "missing"):
+    for path, code in ((link, 3), (fifo, 3), (tmp_path, 3), (big, 3), (tmp_path / "missing", 1)):
         with pytest.raises(pc.Failure) as e:
             pc.cmd_render([*base, "--review", str(path)])
-        assert e.value.code == 1
+        assert e.value.code == code, path
+
+
+def test_render_symlinked_review_exits_3(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "real.md").write_text("ok\n")
+    (tmp_path / "review.md").symlink_to(tmp_path / "real.md")
+    argv = ["render", "--harness", "stub", "--version", "v", "--model", "m", "--head-sha", SHA, "--run-url", RUN_URL]
+    result = subprocess.run(
+        [*ENTRY, *argv, "--review", "review.md"], cwd=tmp_path, capture_output=True, timeout=60, check=False
+    )
+    assert result.returncode == 3
+    assert result.stdout == b""
+
+
+def test_sanitize_oversize_stdin_exits_3(tmp_path: pathlib.Path) -> None:
+    result = subprocess.run(
+        [*ENTRY, "sanitize"], input=b"x" * (pc.INPUT_MAX_BYTES + 1), capture_output=True, timeout=60, check=False
+    )
+    assert result.returncode == 3
+    assert result.stdout == b""
 
 
 # --- post ----------------------------------------------------------------------------

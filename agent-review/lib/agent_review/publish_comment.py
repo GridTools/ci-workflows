@@ -12,8 +12,10 @@ and no PR code. The review is hostile text (agent_review.sanitize).
 workflow runs ``render`` in a step without a token. Only ``post`` runs
 ``gh`` (agent_review.gh), with the token of its step.
 
-Exit codes: 0 on success; 3 if the review is not valid UTF-8 or is empty
-(the workflow then posts nothing and warns); 1 on any other error.
+Exit codes: 0 on success; 3 if the review is not valid UTF-8, is empty, or
+its file is not a regular file (a symlink, a FIFO, ...) within the size cap
+(the workflow then posts nothing and warns); 1 on any other error,
+including a missing review file (the workflow checks for it first).
 
 The comment is found by a marker on its first line, among this workflow's
 own comments only (``BOT_LOGIN``), never with ``gh pr comment --edit-last``:
@@ -108,7 +110,7 @@ def sanitize_review(data: bytes) -> tuple[bytes, bool]:
 def cmd_sanitize() -> bytes:
     data = sys.stdin.buffer.read(INPUT_MAX_BYTES + 1)
     if len(data) > INPUT_MAX_BYTES:
-        raise Failure(f"The review exceeds {INPUT_MAX_BYTES} bytes.")
+        raise Failure(f"The review exceeds {INPUT_MAX_BYTES} bytes.", EXIT_INVALID)
     return sanitize_review(data)[0]
 
 
@@ -155,7 +157,9 @@ def cmd_render(args: Sequence[str]) -> bytes:
     except FileNotFoundError:
         review = None
     except OSError as e:
-        raise Failure(f"Cannot read the review file '{path}': {e}") from e
+        # A symlink, a FIFO, a directory or a file over the cap: an invalid
+        # result (a warning), not an error (a red run); the check is advisory.
+        raise Failure(f"Unusable review file '{path}': {e}", EXIT_INVALID) from e
     if review is None:
         raise Failure(f"No review file '{path}'.")
     return render(
