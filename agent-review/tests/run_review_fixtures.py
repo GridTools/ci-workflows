@@ -5,7 +5,7 @@ always fetches from ``https://github.com/<repo>.git`` with the ``file``
 transport refused; the tests redirect that URL with an inherited
 ``url.<file URL>.insteadOf`` (``GIT_CONFIG_COUNT``) and allow the ``file``
 transport with ``GIT_ALLOW_PROTOCOL``, which overrides ``protocol.*.allow``.
-Neither implementation has a test hook: both read their environment as in
+run-review has no test hook for this: it reads its environment as in
 production (the sandbox zone inherits it).
 """
 
@@ -17,7 +17,6 @@ import subprocess
 from collections.abc import Mapping, Sequence
 
 AR_DIR = pathlib.Path(__file__).resolve().parents[1]
-LEGACY = AR_DIR / "tests" / "legacy" / "run-review.sh"
 PYTHON_CALL = ["/usr/bin/python3", "-I", "-S", "-B"]
 
 COMMIT_ENV = {
@@ -109,7 +108,6 @@ class Upstream:
 def make_root(
     directory: pathlib.Path,
     *,
-    legacy: bool = False,
     rules: str = "",
     extra: str = "",
     addendum: bytes = b"",
@@ -121,8 +119,6 @@ def make_root(
         shutil.copytree(AR_DIR / name, directory / name, symlinks=True)
     for name in ("prompt.md.tmpl", "instruction-files.txt"):
         shutil.copy(AR_DIR / name, directory / name)
-    if legacy:
-        shutil.copy(LEGACY, directory / "bin" / "run-review")
     if central is not None:
         (directory / "instruction-files.txt").write_text(central)
     subprocess.run(
@@ -175,11 +171,8 @@ def make_ws(
 
 
 def entry_argv(root: pathlib.Path) -> list[str]:
-    """The production command line of the root's run-review, by its kind (as tests/lib.sh decides)."""
-    entry = root / "bin" / "run-review"
-    if entry.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash"):
-        return ["/usr/bin/bash", str(entry)]
-    return [*PYTHON_CALL, str(entry)]
+    """The production command line of the root's run-review."""
+    return [*PYTHON_CALL, str(root / "bin" / "run-review")]
 
 
 def run_review(
