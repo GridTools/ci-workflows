@@ -654,7 +654,7 @@ def test_truncation_is_decided_from_the_bytes_read(tmp_path: pathlib.Path, monke
         st = real_fstat(fd)
         return os.stat_result((st.st_mode, *tuple(st)[1:6], 10, *tuple(st)[7:]))
 
-    monkeypatch.setattr(run_review.os, "fstat", stale_fstat)
+    monkeypatch.setattr(os, "fstat", stale_fstat)
     review, truncated = run_review.read_review(str(path)) or (b"", False)
     assert truncated
     assert review.endswith(run_review.TRUNCATION_NOTE)
