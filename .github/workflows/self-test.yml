@@ -230,23 +230,25 @@ jobs:
               sleep $((i * 5))
             done
           }
+          # 'grep -a' throughout: the sandbox's output may put any byte (NUL
+          # included) in the log, which would make grep print 'Binary file matches'.
           log="${RUNNER_TEMP}/review.log"
           prepare_log="${RUNNER_TEMP}/prepare.log"
           fetch_log 'e2e / review-keyless' "${log}"
           fetch_log 'e2e / prepare' "${prepare_log}"
-          expect "fetch run allows only github.com" grep -qE '^[^ ]+ awf\| \[INFO\] Allowed domains: github\.com$' "${log}"
-          expect "review run allows no domain" grep -qE '^[^ ]+ awf\| \[INFO\] Allowed domains: ?$' "${log}"
-          expect "caps clamped" grep -qF '{"rateLimiting":{"requestsPerMinute":30,"requestsPerHour":10},"maxTurns":5,"agentTimeout":10}' "${log}"
-          expect "no key reached AWF" test "$(grep -c 'API proxy enabled: OpenAI=true' "${log}")" -eq 0
-          expect "the reset was verified" grep -qF 'are their base versions.' "${log}"
+          expect "fetch run allows only github.com" grep -aqE '^[^ ]+ awf\| \[INFO\] Allowed domains: github\.com$' "${log}"
+          expect "review run allows no domain" grep -aqE '^[^ ]+ awf\| \[INFO\] Allowed domains: ?$' "${log}"
+          expect "caps clamped" grep -aqF '{"rateLimiting":{"requestsPerMinute":30,"requestsPerHour":10},"maxTurns":5,"agentTimeout":10}' "${log}"
+          expect "no key reached AWF" test "$(grep -ac 'API proxy enabled: OpenAI=true' "${log}")" -eq 0
+          expect "the reset was verified" grep -aqF 'are their base versions.' "${log}"
 
           # The Python runtime (bin/probe, run by the stub harness): on the
           # host in 'prepare' and inside the sandbox, the same interpreter,
           # with the production flags and the standard library only.
           probe='agent-review-probe python=3\.12\.[0-9]+ executable=/usr/bin/python3 isolated=1 ignore_environment=1'
           probe+=' no_user_site=1 no_site=1 dont_write_bytecode=1 safe_path=1 site=0 stdlib_only=1'
-          host=$(grep -E "^[^ ]+ ${probe} lib=/[^ ]+/trusted/lib$" "${prepare_log}" | cut -d' ' -f2- || true)
-          sandbox=$(grep -E "^[^ ]+ awf\| ${probe} lib=/opt/agent-review/lib$" "${log}" | cut -d' ' -f3- || true)
+          host=$(grep -aE "^[^ ]+ ${probe} lib=/[^ ]+/trusted/lib$" "${prepare_log}" | cut -d' ' -f2- || true)
+          sandbox=$(grep -aE "^[^ ]+ awf\| ${probe} lib=/opt/agent-review/lib$" "${log}" | cut -d' ' -f3- || true)
           echo "host:    ${host}"
           echo "sandbox: ${sandbox}"
           expect "Python on the host (prepare)" test "$(wc -l <<< "${host}")" -eq 1 -a -n "${host}"
