@@ -126,3 +126,36 @@ def test_stdin_is_devnull_unless_given() -> None:
 def test_timeout() -> None:
     with pytest.raises(runner.CommandError, match="timed out"):
         runner.run(Zone.TAINTED_HOST, ["/usr/bin/sleep", "5"], timeout=0.2)
+
+
+def test_stdout_cap() -> None:
+    assert (
+        len(runner.run(Zone.TAINTED_HOST, ["/usr/bin/head", "-c", "1000", "/dev/zero"], max_stdout=1000).stdout) == 1000
+    )
+    with pytest.raises(runner.CommandError, match="more than 1000 bytes of output"):
+        runner.run(Zone.TAINTED_HOST, ["/usr/bin/head", "-c", "1001", "/dev/zero"], max_stdout=1000)
+    # An endless writer is killed, not read into memory.
+    with pytest.raises(runner.CommandError, match="bytes of output"):
+        runner.run(Zone.TAINTED_HOST, ["/usr/bin/cat", "/dev/zero"], max_stdout=1 << 20, timeout=30)
+
+
+def test_large_stdin_and_stdout_do_not_deadlock() -> None:
+    data = bytes(range(256)) * 8192  # 2 MiB, more than any pipe buffer
+    result = runner.run(Zone.TAINTED_HOST, ["/usr/bin/cat"], stdin=data, timeout=30)
+    assert result.stdout == data
+
+
+def test_stdin_ignored_by_the_command() -> None:
+    assert runner.run(Zone.TAINTED_HOST, ["/usr/bin/true"], stdin=b"x" * (1 << 20), timeout=30).returncode == 0
+
+
+def test_timeout_after_stdout_is_closed() -> None:
+    with pytest.raises(runner.CommandError, match="timed out"):
+        runner.run(Zone.TAINTED_HOST, ["/bin/sh", "-c", "exec >&- 2>&-; sleep 5"], timeout=0.3)
+
+
+def test_stderr_keeps_the_tail() -> None:
+    script = "printf start >&2; head -c 10000 /dev/zero | tr '\\0' x >&2; printf end >&2"
+    result = runner.run(Zone.TAINTED_HOST, ["/bin/sh", "-c", script])
+    assert len(result.stderr) == runner.STDERR_EXCERPT_BYTES
+    assert result.stderr.endswith(b"xend")

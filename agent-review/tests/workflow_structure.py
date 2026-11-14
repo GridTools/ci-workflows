@@ -25,7 +25,8 @@ Python (docs/adr/0003-python-runtime.md):
   name the file inline, never through a variable;
 - no other mention of 'python', no 'pip', no 'setup-python' in
   agent-review.yml; in the shell files under bin/ and harnesses/, only the
-  Python call form;
+  Python call form, with the root in 'ar_root' set from the file's path;
+  no Python shebang and no '.py' file outside lib/agent_review/ and tests/;
 - entry points: each file in bin/ is a bash script (by its shebang) or exactly the Python
   template, and Python entry points are not executable (mode 100644);
 - the tracked tree under agent-review/: no symlink or submodule, no '.pth',
@@ -37,7 +38,12 @@ Python (docs/adr/0003-python-runtime.md):
   (nor 'import os as ...' or 'import *', which would hide them);
   subprocess only in agent_review/runner.py; no 'shell=' argument anywhere;
 - token reach: only the 'authorize' and 'publish-comment' entry points can
-  import agent_review.gh, and only gh.py names the 'gh' program.
+  import agent_review.gh; only gh.py names the 'gh' program (by basename)
+  and uses the trusted-host zone. The token itself is in a step's env, which
+  the workflow decides; this keeps the code that runs there narrow.
+- indirect access: no getattr/setattr/delattr on an imported module, no
+  globals()/vars()/locals(), no sys.modules (except the probe), no
+  standard-library module imported through agent_review.*.
 """
 
 import ast
@@ -191,7 +197,13 @@ def call_site_problems(workflow: Mapping[str, Any], kinds: Mapping[str, str | No
                 if before.endswith(EXISTENCE_CHECK) and after.startswith('" ]'):
                     continue
                 if kind == "python":
-                    if not before.endswith(PYTHON_FORMS[root]) or PYTHON_AFTER[root].match(after) is None:
+                    start = len(before) - len(PYTHON_FORMS[root])
+                    bounded = start == 0 or (start > 0 and CALL_BOUNDARY.fullmatch(before[start - 1]) is not None)
+                    if (
+                        not before.endswith(PYTHON_FORMS[root])
+                        or not bounded
+                        or PYTHON_AFTER[root].match(after) is None
+                    ):
                         problems.append(f"{where}: bin/{name} is Python; call it exactly as {python_call(root, name)}")
                 elif not before.endswith(BASH_FORMS):
                     problems.append(f"{where}: bin/{name} is bash; unexpected call form '{line.strip()}'")
@@ -211,9 +223,14 @@ def strings(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, 
 
 
 PYTHON_WORD = re.compile(r"python", re.IGNORECASE)
+# What may precede '/usr/bin/python3': a command boundary, never part of a
+# word or path ('"${HOME}"/usr/bin/python3').
+CALL_BOUNDARY = re.compile(r"[\s(;|&]")
+_BOUNDARY = r"(?<![^\s(;|&])"
 PIP_WORD = re.compile(r"(?<![A-Za-z0-9_])pip(?:x|[0-9.]*)(?![A-Za-z0-9_])|setup-python|ensurepip", re.IGNORECASE)
 YAML_PYTHON_CALL = re.compile(
-    re.escape(PYTHON_CALL) + r' (?:"\$\{RUNNER_TEMP\}/trusted|/opt/agent-review)/bin/([a-z][a-z0-9-]*)', re.ASCII
+    _BOUNDARY + re.escape(PYTHON_CALL) + r' (?:"\$\{RUNNER_TEMP\}/trusted|/opt/agent-review)/bin/([a-z][a-z0-9-]*)',
+    re.ASCII,
 )
 
 
@@ -233,25 +250,48 @@ def python_word_problems(workflow: Mapping[str, Any], kinds: Mapping[str, str | 
     return problems
 
 
+# In shell files the root is the variable 'ar_root', set from the file's own
+# path by exactly ar_root_line() (the agent-review/ directory).
+SHELL_ROOT_VAR = "ar_root"
 SHELL_PYTHON_CALL = re.compile(
-    re.escape(PYTHON_CALL) + r' "\$\{[A-Za-z_][A-Za-z0-9_]*\}/bin/([a-z][a-z0-9-]*)"', re.ASCII
+    _BOUNDARY + re.escape(PYTHON_CALL) + r' "\$\{' + SHELL_ROOT_VAR + r'\}/bin/([a-z][a-z0-9-]*)"', re.ASCII
 )
 
 
+def ar_root_line(rel: str) -> str:
+    """The line that sets the root in the shell file ``rel`` (relative to agent-review/)."""
+    ups = "/".join([".."] * (len(rel.split("/")) - 1))
+    return f'{SHELL_ROOT_VAR}=$(cd "$(dirname "${{BASH_SOURCE[0]}}")/{ups}" && pwd)'
+
+
 def shell_python_problems(sources: Mapping[str, str], kinds: Mapping[str, str | None]) -> list[str]:
-    """In shell files: Python only as '/usr/bin/python3 -I -S -B "${ROOT}/bin/<python entry>"'."""
+    """In shell files: Python only as '/usr/bin/python3 -I -S -B "${ar_root}/bin/<python entry>"'.
+
+    Comment lines are skipped, but not the shebang. A file that calls Python
+    must set 'ar_root' with exactly ar_root_line(), and nothing else.
+    """
     problems = []
     for rel, text in sorted(sources.items()):
+        calls = False
         for number, line in enumerate(text.split("\n"), 1):
-            if line.lstrip().startswith("#"):
+            if line.lstrip().startswith("#") and not (number == 1 and line.startswith("#!")):
                 continue
             allowed = {
                 m.start() + len("/usr/bin/")
                 for m in SHELL_PYTHON_CALL.finditer(line)
                 if kinds.get(m.group(1)) == "python"
             }
+            calls = calls or bool(allowed)
             if any(m.start() not in allowed for m in PYTHON_WORD.finditer(line)):
-                problems.append(f"{rel}:{number}: Python only as '{PYTHON_CALL} \"${{ROOT}}/bin/<entry point>\"'")
+                problems.append(
+                    f"{rel}:{number}: Python only as '{PYTHON_CALL} \"${{{SHELL_ROOT_VAR}}}/bin/<entry point>\"'"
+                )
+            if re.match(rf"\s*(?:export\s+|local\s+|readonly\s+|declare\s+\S+\s+)?{SHELL_ROOT_VAR}\b", line) and (
+                line.strip() != ar_root_line(rel)
+            ):
+                problems.append(f"{rel}:{number}: set '{SHELL_ROOT_VAR}' only as '{ar_root_line(rel)}'")
+        if calls and ar_root_line(rel) not in [line.strip() for line in text.split("\n")]:
+            problems.append(f"{rel}: calls Python but does not set '{SHELL_ROOT_VAR}' as '{ar_root_line(rel)}'")
     return problems
 
 
@@ -272,12 +312,29 @@ def tree_problems(index: list[tuple[str, str]]) -> list[str]:
             problems.append(f"{path}: a submodule")
         if any(part in FORBIDDEN_NAMES for part in parts) or path.endswith(FORBIDDEN_SUFFIXES):
             problems.append(f"{path}: forbidden name")
+        in_python_dirs = path.startswith(("agent-review/lib/agent_review/", "agent-review/tests/"))
+        if path.endswith(".py") and not in_python_dirs:
+            problems.append(f"{path}: Python files belong in lib/agent_review/ (or tests/)")
         if path.startswith("agent-review/lib/"):
             if not path.startswith("agent-review/lib/agent_review/"):
                 problems.append(f"{path}: lib/ may hold only agent_review/")
             elif not path.endswith(".py"):
                 problems.append(f"{path}: agent_review/ may hold only .py files")
     return problems
+
+
+def shebang_problems(first_lines: Mapping[str, str]) -> list[str]:
+    """No Python shebang outside lib/agent_review/ and tests/: such a file would run without '-I -S'.
+
+    ``first_lines``: path under agent-review/ -> its first line.
+    """
+    return [
+        f"{path}: a Python shebang ('{line}'); use an entry point in bin/"
+        for path, line in sorted(first_lines.items())
+        if line.startswith("#!")
+        and PYTHON_WORD.search(line)
+        and not path.startswith(("agent-review/lib/agent_review/", "agent-review/tests/"))
+    ]
 
 
 # --- Imports and calls (AST) -------------------------------------------------------
@@ -303,6 +360,7 @@ STDLIB_ALLOWED = frozenset(
         "pathlib",
         "re",
         "secrets",
+        "selectors",
         "stat",
         "string",
         "subprocess",
@@ -317,8 +375,16 @@ STDLIB_ALLOWED = frozenset(
 )
 RUNNER_MODULE = "lib/agent_review/runner.py"
 GH_MODULE = "lib/agent_review/gh.py"
-BANNED_CALLS = frozenset({"eval", "exec", "compile", "__import__", "breakpoint"})
-BANNED_OS = re.compile(r"system|popen|exec.*|spawn.*|posix_spawnp?|fork|forkpty", re.ASCII)
+BANNED_CALLS = frozenset(
+    {"eval", "exec", "compile", "__import__", "breakpoint", "globals", "locals", "vars", "__builtins__"}
+)
+# Banned as attributes of anything, not only of 'os', so that a re-exported
+# or aliased module cannot reach them ('runner.os.system').
+BANNED_OS = re.compile(r"system|popen|exec[lv]p?e?|spawn[lv]p?e?|posix_spawnp?|fork|forkpty", re.ASCII)
+# 'sys.modules' gives any loaded module, whatever the import rules say.
+SYS_MODULES_ALLOWED = frozenset({"lib/agent_review/probe.py"})
+# Only gh.py may run programs on the trusted host, where the token is.
+TRUSTED_ZONE_ALLOWED = frozenset({RUNNER_MODULE, GH_MODULE})
 GH_ENTRY_POINTS = frozenset({"authorize", "publish-comment"})
 
 
@@ -330,6 +396,17 @@ def _module_name(rel: str) -> str | None:
     return name.removesuffix(".__init__")
 
 
+def _imported_names(tree: ast.AST) -> set[str]:
+    """The names that import statements bind in ``tree``."""
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bound |= {a.asname or a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            bound |= {a.asname or a.name for a in node.names}
+    return bound
+
+
 def ast_problems(sources: Mapping[str, str]) -> list[str]:
     """``sources``: path relative to agent-review/ -> text, for lib/ and the Python bin/ files."""
     problems = []
@@ -339,6 +416,7 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
         except SyntaxError as e:
             problems.append(f"{rel}: does not parse ({e.msg})")
             continue
+        modules = _imported_names(tree)
         for node in ast.walk(tree):
             where = f"{rel}:{getattr(node, 'lineno', 0)}"
             names: list[str] = []
@@ -355,6 +433,14 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
                 names = [node.module or ""]
                 if node.module == "os":
                     problems += [f"{where}: os.{a.name}" for a in node.names if BANNED_OS.fullmatch(a.name)]
+                if (node.module or "").split(".")[0] == "agent_review":
+                    # A standard-library module re-exported by a package module
+                    # ('from agent_review.runner import subprocess').
+                    problems += [
+                        f"{where}: '{a.name}' imported through {node.module}"
+                        for a in node.names
+                        if a.name in STDLIB_ALLOWED or a.name in ("importlib", "pickle", "marshal", "ctypes")
+                    ]
             for name in names:
                 top = name.split(".")[0]
                 if top == "subprocess" and rel != RUNNER_MODULE:
@@ -363,16 +449,37 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
                     problems.append(f"{where}: import of '{name}' is not allowlisted")
             if isinstance(node, ast.Name) and node.id in BANNED_CALLS:
                 problems.append(f"{where}: '{node.id}'")
+            if isinstance(node, ast.Attribute):
+                if BANNED_OS.fullmatch(node.attr):
+                    problems.append(f"{where}: '.{node.attr}'")
+                if node.attr == "subprocess" and rel != RUNNER_MODULE:
+                    problems.append(f"{where}: '.subprocess' outside agent_review/runner.py")
+                if node.attr == "TRUSTED_HOST" and rel not in TRUSTED_ZONE_ALLOWED:
+                    problems.append(f"{where}: the trusted-host zone (the token) outside agent_review/gh.py")
+                if (
+                    node.attr == "modules"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "sys"
+                    and rel not in SYS_MODULES_ALLOWED
+                ):
+                    problems.append(f"{where}: 'sys.modules'")
             if (
-                isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == "os"
-                and BANNED_OS.fullmatch(node.attr)
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("getattr", "setattr", "delattr")
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in modules
             ):
-                problems.append(f"{where}: os.{node.attr}")
+                problems.append(f"{where}: {node.func.id}() on the module '{node.args[0].id}'")
             if isinstance(node, ast.keyword) and node.arg == "shell":
                 problems.append(f"{where}: a 'shell=' argument")
-            if isinstance(node, ast.Constant) and node.value == "gh" and rel != GH_MODULE:
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.rsplit("/", 1)[-1] == "gh"
+                and rel != GH_MODULE
+            ):
                 problems.append(f"{where}: the 'gh' program outside agent_review/gh.py")
     return problems
 
@@ -456,7 +563,21 @@ def repository() -> dict[str, Any]:
         if (rel.startswith("bin/") and kinds.get(rel[len("bin/") :]) == "bash")
         or (rel.startswith("harnesses/") and (rel.endswith(".sh") or read(rel).startswith("#!")))
     }
-    return {"index": index, "entries": entries, "kinds": kinds, "lib": lib, "python": python, "shell": shell}
+    first_lines = {path: _first_line(path) for mode, path in index if mode != "120000"}
+    return {
+        "index": index,
+        "entries": entries,
+        "kinds": kinds,
+        "lib": lib,
+        "python": python,
+        "shell": shell,
+        "first_lines": first_lines,
+    }
+
+
+def _first_line(path: str) -> str:
+    with (ROOT / path).open("rb") as f:
+        return f.readline(256).decode("utf-8", errors="replace").rstrip("\n")
 
 
 def load(path: pathlib.Path) -> Any:

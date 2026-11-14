@@ -14,3 +14,15 @@ updates:
     # the routine group.
     ignore:
       - dependency-name: github/gh-aw-firewall
+  # The self-test's test-only tools (pytest, mypy, PyYAML): uv re-runs the
+  # 'uv pip compile --generate-hashes' recorded in requirements.txt, so the
+  # hashes stay. A week of cooldown before a new release is proposed.
+  - package-ecosystem: uv
+    directory: /agent-review/tests
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python-test-tools:
+        patterns: ["*"]

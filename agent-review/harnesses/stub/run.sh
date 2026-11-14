@@ -24,8 +24,8 @@ head_sha=$(git -c core.hooksPath=/dev/null -C "${REPO_DIR}" rev-parse HEAD)
 
 # The Python runtime inside the sandbox, from the PR checkout as working
 # directory (bin/probe; install.sh prints the host's line).
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-/usr/bin/python3 -I -S -B "${root}/bin/probe"
+ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+/usr/bin/python3 -I -S -B "${ar_root}/bin/probe"
 
 # Names only, never values: confirms in the log that no credential-like
 # variable other than AWF's placeholders reaches the sandbox.

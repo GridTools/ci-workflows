@@ -47,7 +47,15 @@ def test_log_lines_prefix_every_line() -> None:
     assert out.getvalue() == b"awf| one\nawf| ::error::two\nawf| \nawf| three\n"
 
 
-@pytest.mark.parametrize("prefix", ["", "::", " ::x", "a\nb"])
+def test_log_lines_break_legacy_commands() -> None:
+    out = io.BytesIO()
+    workflow.log_lines("x ##[warning]fake\n##[add-mask]v ##[set-output name=a;]b", "awf| ", stream=out)
+    text = out.getvalue().decode()
+    assert "##[" not in text
+    assert text == "awf| x #\u200b#[warning]fake\nawf| #\u200b#[add-mask]v #\u200b#[set-output name=a;]b\n"
+
+
+@pytest.mark.parametrize("prefix", ["", "::", " ::x", "a\nb", " x", "\u00a0x", "\tx", ":x", "a\x00", "##[x", "a::b"])
 def test_log_lines_rejects_unsafe_prefixes(prefix: str) -> None:
     with pytest.raises(ValueError, match="prefix"):
         workflow.log_lines("x", prefix, stream=io.BytesIO())

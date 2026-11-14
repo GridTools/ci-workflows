@@ -5,9 +5,12 @@
 - ``set_output`` writes ``name=value`` lines to ``$GITHUB_OUTPUT`` and
   rejects CR and LF in values: a newline would let a value set other
   outputs. The multi-line (heredoc) form is not offered.
-- ``log_lines`` prefixes every line of text that may be untrusted, so none
-  can start a workflow command; it never uses ``::stop-commands::``, whose
-  token would be printed to the live log first.
+- ``log_lines`` writes text that may be untrusted: every line gets a prefix
+  that starts with neither whitespace nor ``:`` (the runner trims leading
+  whitespace, including non-breaking spaces, before matching ``::``), and
+  every ``##[`` is broken up with a zero-width space, because the runner's
+  legacy parser finds ``##[command]`` anywhere in a line. It never uses
+  ``::stop-commands::``, whose token would be printed to the live log first.
 
 Everything is written as strict UTF-8 bytes, never in the locale's
 encoding.
@@ -65,11 +68,28 @@ def error(message: str, *, title: str | None = None, stream: BinaryIO | None = N
     _write(stream or _stdout(), command("error", message, {"title": title} if title else None))
 
 
+# The legacy command marker, and what it becomes in log text.
+LEGACY_MARKER = "##["
+LEGACY_BROKEN = "#\u200b#["
+
+
+def neutralise(text: str) -> str:
+    """Breaks up every legacy command marker (``##[``) in ``text``."""
+    return text.replace(LEGACY_MARKER, LEGACY_BROKEN)
+
+
 def log_lines(text: str, prefix: str, *, stream: BinaryIO | None = None) -> None:
     """Writes ``text`` with ``prefix`` before every line; CRs are dropped."""
-    if not prefix or prefix.lstrip().startswith(":") or "\n" in prefix or "\r" in prefix:
+    if (
+        not prefix
+        or prefix[0].isspace()
+        or prefix[0] == ":"
+        or not prefix.isprintable()
+        or LEGACY_MARKER in prefix
+        or "::" in prefix
+    ):
         raise ValueError(f"invalid log prefix {prefix!r}")
-    lines = text.replace("\r", "").split("\n")
+    lines = neutralise(text.replace("\r", "")).split("\n")
     if lines and lines[-1] == "":
         lines.pop()
     _write(stream or _stdout(), "".join(f"{prefix}{line}\n" for line in lines))

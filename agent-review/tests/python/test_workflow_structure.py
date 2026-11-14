@@ -204,21 +204,72 @@ def test_unknown_entry_point_and_job_fail() -> None:
     assert any("bin/nope is not a known entry point" in p for p in found)
 
 
+ROOT_LINE = 'ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)'
+GOOD_CALL = '/usr/bin/python3 -I -S -B "${ar_root}/bin/probe"'
+
+
+def shell(*lines: str) -> dict[str, str]:
+    return {"harnesses/x/run.sh": "#!/usr/bin/env bash\n" + "".join(f"{line}\n" for line in lines)}
+
+
 def test_shell_files() -> None:
     kinds = {"probe": "python", "run-review": "bash"}
-    good = {"harnesses/x/run.sh": '# python here is a comment\n/usr/bin/python3 -I -S -B "${root}/bin/probe"\n'}
-    assert ws.shell_python_problems(good, kinds) == []
+    assert ws.shell_python_problems(shell("# python in a comment", ROOT_LINE, GOOD_CALL), kinds) == []
+    assert ws.shell_python_problems(shell(ROOT_LINE, f"out=$({GOOD_CALL})", f"x && {GOOD_CALL}"), kinds) == []
+    assert ws.ar_root_line("bin/run-review") == 'ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)'
     for line in [
-        'python3 "${root}/bin/probe"',
-        '/usr/bin/python3 -I -S -B "${root}/bin/run-review"',
+        'python3 "${ar_root}/bin/probe"',
+        '/usr/bin/python3 -I -S -B "${ar_root}/bin/run-review"',
         "/usr/bin/python3 -I -S -B -c 'import os'",
-        "pip install x",
+        '/usr/bin/python3 -I -S -B "${GITHUB_WORKSPACE}/bin/probe"',
+        '/usr/bin/python3 -I -S -B "${root}/bin/probe"',
+        '"${HOME}"/usr/bin/python3 -I -S -B "${ar_root}/bin/probe"',
         "exec python3",
     ]:
-        problems = ws.shell_python_problems({"harnesses/x/run.sh": line + "\n"}, kinds)
-        if "pip" in line and "python" not in line:
-            continue  # pip in a shell file is not a Python call; the AST and tree rules cover the rest
-        assert problems, line
+        assert ws.shell_python_problems(shell(ROOT_LINE, line), kinds), line
+
+
+def test_shell_root_must_be_set_from_the_files_path() -> None:
+    kinds = {"probe": "python"}
+    assert any("does not set" in p for p in ws.shell_python_problems(shell(GOOD_CALL), kinds))
+    for bad in ["ar_root=/tmp/evil", "export ar_root=${HOME}", 'ar_root=$(cd "$(dirname "$0")/../.." && pwd)']:
+        found = ws.shell_python_problems(shell(ROOT_LINE, bad, GOOD_CALL), kinds)
+        assert any("set 'ar_root' only as" in p for p in found), bad
+
+
+def test_python_shebang_in_a_shell_file_fails() -> None:
+    sources = {"harnesses/x/helper.sh": "#!/usr/bin/env python3\nprint(1)\n"}
+    assert ws.shell_python_problems(sources, {})
+
+
+def test_shebang_problems() -> None:
+    lines = {
+        "agent-review/harnesses/x/helper": "#!/usr/bin/env python3",
+        "agent-review/bin/tool": "#!/usr/bin/python3 -I",
+        "agent-review/harnesses/x/run.sh": "#!/usr/bin/env bash",
+        "agent-review/tests/tool": "#!/usr/bin/env python3",
+        "agent-review/lib/agent_review/x.py": "#!/usr/bin/python3",
+        "agent-review/prompt.md.tmpl": "# python",
+    }
+    assert ws.shebang_problems(lines) == [
+        "agent-review/bin/tool: a Python shebang ('#!/usr/bin/python3 -I'); use an entry point in bin/",
+        "agent-review/harnesses/x/helper: a Python shebang ('#!/usr/bin/env python3'); use an entry point in bin/",
+    ]
+
+
+def test_real_shebangs_pass() -> None:
+    assert ws.shebang_problems(REPO["first_lines"]) == []
+
+
+@pytest.mark.parametrize(
+    "call",
+    [f'"${{HOME}}"{PY}{TRUSTED}authorize"', f'x{PY}{TRUSTED}authorize"'],
+)
+def test_call_needs_a_command_boundary(call: str) -> None:
+    ported = frozenset({"authorize"})
+    workflow = fixture(ported)
+    assert edit_runs(workflow, f'{PY}{TRUSTED}authorize"', call)
+    assert problems(workflow, kinds(ported))
 
 
 def test_real_shell_files_pass() -> None:
@@ -284,6 +335,8 @@ def test_real_tree_passes() -> None:
         ("100644", "agent-review/lib/other.py"),
         ("100644", "agent-review/lib/agent_review/_speedups.so"),
         ("100644", "agent-review/lib/agent_review/data.json"),
+        ("100644", "agent-review/harnesses/x/helper.py"),
+        ("100644", "agent-review/bin/tool.py"),
     ],
 )
 def test_tree_problems(mode: str, path: str) -> None:
@@ -329,6 +382,17 @@ def test_real_python_passes() -> None:
         "f(shell=True)\n",
         "f(shell=False)\n",
         "run(['gh', 'api'])\n",
+        "run(['/usr/bin/gh', 'api'])\n",
+        "from agent_review import runner\nrunner.run(runner.Zone.TRUSTED_HOST, ['x'])\n",
+        "from agent_review.runner import subprocess\n",
+        "from agent_review.runner import os\n",
+        "from agent_review import runner\nrunner.subprocess.run(['x'])\n",
+        "from agent_review import runner\nrunner.os.system('id')\n",
+        "import os\ngetattr(os, 'system')('id')\n",
+        "import os as _\n",
+        "import sys\nsys.modules['os']\n",
+        "globals()['__builtins__']\n",
+        "vars()\n",
     ],
 )
 def test_ast_problems(source: str) -> None:
@@ -343,7 +407,10 @@ def test_subprocess_and_gh_only_in_their_modules() -> None:
 
 
 def test_ordinary_code_is_allowed() -> None:
-    source = "import re\nimport os.path\nimport pathlib\nfrom os import fspath\nre.compile('x')\nos.fspath('x')\n"
+    source = (
+        "import re\nimport os.path\nimport pathlib\nimport sys\nfrom os import fspath\n"
+        "re.compile('x')\nos.fspath('x')\ngetattr(sys.flags, 'isolated')\nsys.executable\nos.execute = 1\n"
+    )
     assert ws.ast_problems({"lib/agent_review/x.py": source}) == []
 
 

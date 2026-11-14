@@ -20,6 +20,7 @@ from workflow_structure import (
     load,
     python_word_problems,
     repository,
+    shebang_problems,
     shell_python_problems,
     strings,
     token_reach_problems,
@@ -163,6 +164,7 @@ def main() -> int:
     check_problems(shell_python_problems(repo["shell"], kinds), "shell files: Python only in the exact call form")
     check_problems(entry_problems(repo["entries"], repo["lib"]), "bin/: bash scripts or the exact Python template")
     check_problems(tree_problems(repo["index"]), "tree: no symlink, .pth, .pyc, __pycache__, *customize.py")
+    check_problems(shebang_problems(repo["first_lines"]), "no Python shebang outside lib/agent_review/ and tests/")
     check_problems(ast_problems(repo["python"]), "Python: allowlisted imports, no dynamic code, no shell")
     check_problems(token_reach_problems(repo["python"]), "token reach: agent_review.gh only from authorize, publish")
 

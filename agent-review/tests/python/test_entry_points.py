@@ -84,7 +84,11 @@ def test_hostile_environment_loads_nothing(
     name: str, hostile: tuple[pathlib.Path, dict[str, str], pathlib.Path]
 ) -> None:
     cwd, env, markers = hostile
-    subprocess.run([*PYTHON_CALL, str(BIN_DIR / name)], cwd=cwd, env=env, capture_output=True, timeout=60, check=False)
+    result = subprocess.run(
+        [*PYTHON_CALL, str(BIN_DIR / name)], cwd=cwd, env=env, capture_output=True, timeout=60, check=False
+    )
+    # The entry point got past its flag guard, so the test is not vacuous.
+    assert b"run only as" not in result.stderr
     assert sorted(p.name for p in markers.iterdir()) == []
 
 
