@@ -212,7 +212,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
           if [ "${HAS_KEY}" != true ]; then
-            echo "::error::No inference key reached this job: map the secret 'inference_api_key' from the '${ENVIRONMENT}' environment's secret."
+            echo "::error::No inference key reached this job. Set the key as a secret of the '${ENVIRONMENT}' environment and map it to 'inference_api_key'."
             exit 1
           fi
 

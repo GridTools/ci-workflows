@@ -48,9 +48,13 @@ existing=$(tail -n 1 <<<"${ids}")
 for id in ${ids}; do
   if [ "${state}" = success ] || [ "${id}" != "${existing}" ]; then
     gh api -X DELETE "repos/${REPO}/issues/comments/${id}" --silent
+    echo "::notice::Deleted failure comment ${id}."
   fi
 done
-[ "${state}" = failure ] || exit 0
+if [ "${state}" = success ]; then
+  [ -n "${ids}" ] || echo "::notice::No failure comment to remove."
+  exit 0
+fi
 
 echo "::warning title=PR Agent failed::No review was posted. See the 'pr-agent' job's log."
 docs=${DOCS_URL:-${DOCS}}
@@ -58,6 +62,8 @@ body="${MARKER}
 **PR Agent could not complete its last run** ([log](${RUN_URL}), [docs](${docs})). The review is advisory, so nothing needs to be done; a user with write access can retry with \`/review\`."
 if [ -n "${existing}" ]; then
   gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="${body}" --silent
+  echo "::notice::Updated failure comment ${existing}."
 else
-  gh api "repos/${REPO}/issues/${PR}/comments" -f body="${body}" --silent
+  id=$(gh api "repos/${REPO}/issues/${PR}/comments" -f body="${body}" --jq .id)
+  echo "::notice::Posted failure comment ${id}."
 fi

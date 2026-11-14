@@ -40,7 +40,8 @@ case "${method} ${path}" in
   "PATCH repos/example-org/example/issues/comments/"*)
     id=${path##*/}; jq --argjson id "${id}" --arg b "${body}" 'map(if .id == $id then .body = $b else . end)' "${c}" >"${c}.new" && mv "${c}.new" "${c}" ;;
   "POST repos/example-org/example/issues/12/comments")
-    jq --arg b "${body}" '. + [{id: 999, user: {login: "github-actions[bot]"}, body: $b}]' "${c}" >"${c}.new" && mv "${c}.new" "${c}" ;;
+    jq --arg b "${body}" '. + [{id: 999, user: {login: "github-actions[bot]"}, body: $b}]' "${c}" >"${c}.new" && mv "${c}.new" "${c}"
+    [ -z "${jq_filter}" ] || echo 999 ;;
   *) echo "unexpected call: ${method} ${path}" >&2; exit 1 ;;
 esac
 EOS
@@ -68,21 +69,25 @@ test_failure_no_existing() {
   setup
   run && assert "one new comment" test "$(failure_ids)" = 999 && unrelated_kept &&
     assert "links the run" grep -qF "([log](${RUN_URL}), [docs](https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md))" comments.json &&
-    assert "warning" grep -qF "::warning title=PR Agent failed::" log
+    assert "warning" grep -qF "::warning title=PR Agent failed::" log &&
+    assert "notice" grep -qF "::notice::Posted failure comment 999." log
 }
 test_failure_one_existing() {
   setup; add_failure_comments 10
   run && assert "updated in place" test "$(failure_ids)" = 10 && assert "new text" grep -qF "could not complete" comments.json &&
-    assert "no POST" bash -c "! grep -q '^POST' calls" && unrelated_kept
+    assert "no POST" bash -c "! grep -q '^POST' calls" && unrelated_kept &&
+    assert "notice" grep -qF "::notice::Updated failure comment 10." log
 }
 test_failure_several_existing() {
   setup; add_failure_comments 10 11 12
-  run && assert "only the newest kept" test "$(failure_ids)" = 12 && unrelated_kept
+  run && assert "only the newest kept" test "$(failure_ids)" = 12 && unrelated_kept &&
+    assert "deletions logged" test "$(grep -c '::notice::Deleted failure comment 1[01]\.' log)" -eq 2
 }
 setup_success() { setup; export OUTCOME=success; }
 test_success_none() {
   setup_success
-  run && assert "nothing posted" test -z "$(failure_ids)" && assert "only a GET" test "$(cat calls)" = "GET repos/example-org/example/issues/12/comments"
+  run && assert "nothing posted" test -z "$(failure_ids)" && assert "only a GET" test "$(cat calls)" = "GET repos/example-org/example/issues/12/comments" &&
+    assert "notice" grep -qF "::notice::No failure comment to remove." log
 }
 test_success_one() { setup_success; add_failure_comments 10; run && assert "deleted" test -z "$(failure_ids)" && unrelated_kept; }
 test_success_several() { setup_success; add_failure_comments 10 11 12; run && assert "all deleted" test -z "$(failure_ids)" && unrelated_kept; }
