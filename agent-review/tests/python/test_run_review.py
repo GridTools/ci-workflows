@@ -617,3 +617,28 @@ def test_pr_changing_an_intermediate_hop_fails_closed(tmp_path: pathlib.Path, up
     assert log.endswith("exit 1"), log
     assert "'.claude/skills' is a symlink or a gitlink where the reset expects" in log
     assert not (ws / "prompt.md").exists()
+
+
+def test_out_that_cannot_be_emptied_is_replaced(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    """A read-only directory in out/ made removing out/ fail: no meta.json, a planted review left."""
+    _, base_sha, head_sha = upstream.make(FORK, {}, {})
+    root = make_root(tmp_path / "root")
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    assert run_entry(root, ["--phase", "fetch", str(ws)], env=upstream.env()).returncode == 0
+    set_adapter(
+        root,
+        'out="${OUT_DIR}/../out"\nmkdir -p "${out}/d"\n: > "${out}/d/f"\necho "### Forged" > "${out}/review.md"\n'
+        'chmod 500 "${out}/d"\necho "### Summary" > "${OUT_DIR}/review.md"\n',
+    )
+    try:
+        result = run_entry(root, ["--phase", "review", str(ws)])
+        assert result.returncode == 0, result.stdout.decode()
+        assert sorted(p.name for p in (ws / "out").iterdir()) == ["meta.json", "review.md"]
+        assert (ws / "out" / "review.md").read_text() == "### Summary\n"
+        assert json.loads((ws / "out" / "meta.json").read_text())["status"] == "ok"
+        # The old out/ is aside, under a random name.
+        aside = [p.name for p in ws.iterdir() if p.name.startswith("out.harness-")]
+        assert len(aside) == 1 and re.fullmatch(r"out\.harness-[0-9a-f]{16}", aside[0])
+    finally:
+        for d in ws.glob("out*/d"):
+            d.chmod(0o755)

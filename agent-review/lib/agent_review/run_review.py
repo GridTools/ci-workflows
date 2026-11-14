@@ -37,8 +37,10 @@ and ``STUB_PADDING_KIB`` set, and the run's ``HOME``, ``TMPDIR`` and forced
 review, 2 none.
 """
 
+import contextlib
 import json
 import os
+import secrets
 import shutil
 import stat
 import sys
@@ -306,10 +308,7 @@ class Run:
 
         say(f"run-review: running harness '{p.harness}' on {p.repo}#{p.pr_number} at {p.head_sha}.")
         harness_exit = self._run_harness()
-        # The harness can write anywhere in the workspace, 'out/' included:
-        # only what this script writes there from now on is the result.
-        remove(self.result_dir)
-        os.makedirs(self.result_dir)
+        self._fresh_result_dir()
         status = {0: "ok", 2: "no-review", 124: "timeout", 137: "timeout"}.get(harness_exit, "failed")
 
         # The harness output is agent-controlled: accept only a regular file.
@@ -328,6 +327,25 @@ class Run:
         self._write_meta("ok", harness_exit, truncated=truncated, review_bytes=len(review))
         say(f"run-review: review written ({len(review)} bytes, truncated={'true' if truncated else 'false'}).")
         return 0
+
+    def _fresh_result_dir(self) -> None:
+        """Replaces out/ by an empty directory after the harness ran.
+
+        The harness can write anywhere in the workspace, out/ included, and
+        could make it impossible to empty (a read-only subdirectory), so the
+        old out/ is renamed aside, under a name it cannot guess, and removed
+        as far as possible. Only what this script writes into the new out/ is
+        the result. A harness process left running could still write there
+        until the sandbox is torn down: the workflow collects nothing while
+        any sandbox container survives, and collect-result accepts only a
+        regular review.md and meta.json, re-checked on the host.
+        """
+        if os.path.lexists(self.result_dir):
+            aside = f"{self.result_dir}.harness-{secrets.token_hex(8)}"
+            os.rename(self.result_dir, aside)
+            with contextlib.suppress(OSError):  # else left in the workspace, outside out/
+                remove(aside)
+        os.mkdir(self.result_dir)
 
     def _run_harness(self) -> int:
         """The adapter's exit code (bash's '$?': 128 + n for a signal, 127 if it cannot start)."""
