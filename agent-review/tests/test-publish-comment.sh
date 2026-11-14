@@ -12,10 +12,10 @@ ZWSP=$'\xe2\x80\x8b'
 RUN_URL="https://github.com/example-org/gt4py/actions/runs/1"
 SHA=0123456789abcdef0123456789abcdef01234567
 
-sanitize() { bash "${PC}" sanitize; }
+sanitize() { run_entry "${PC}" sanitize; }
 lacks() { ! grep -qE -- "$1" <<<"$2"; } # pattern text
 render() {
-  bash "${PC}" render --harness stub --version stub-1 --model none --head-sha "${SHA}" \
+  run_entry "${PC}" render --harness stub --version stub-1 --model none --head-sha "${SHA}" \
     --run-url "${RUN_URL}" --review "$1"
 }
 
@@ -116,13 +116,13 @@ test_render_marker_header_and_limit() {
 
 test_render_rejects_invalid_head_sha() {
   echo "review" >review.md
-  ! bash "${PC}" render --harness stub --version stub-1 --model none --head-sha 'main' \
+  ! run_entry "${PC}" render --harness stub --version stub-1 --model none --head-sha 'main' \
     --run-url "${RUN_URL}" --review review.md >/dev/null 2>&1
 }
 
 test_render_rejects_markdown_in_labels() {
   echo "review" >review.md
-  ! bash "${PC}" render --harness stub --version '1 [x](https://evil)' --model none --head-sha "${SHA}" \
+  ! run_entry "${PC}" render --harness stub --version '1 [x](https://evil)' --model none --head-sha "${SHA}" \
     --run-url "${RUN_URL}" --review review.md >/dev/null 2>&1
 }
 
@@ -152,7 +152,7 @@ post() {
   echo "<!-- agent-review:stub -->" >body.md
   echo "text" >>body.md
   FAKE_DIR="${TMP}" PATH="${TMP}/bin:${PATH}" \
-    bash "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null
+    run_entry "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null
 }
 
 test_post_updates_own_marked_comment() {
@@ -186,7 +186,7 @@ test_post_refuses_body_without_marker() {
   install_fake_gh ""
   echo "no marker" >body.md
   ! FAKE_DIR="${TMP}" PATH="${TMP}/bin:${PATH}" \
-    bash "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null 2>&1
+    run_entry "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null 2>&1
 }
 
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do run_test "$t"; done

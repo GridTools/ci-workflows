@@ -1,33 +1,30 @@
 """Structural checks of the agent review workflow (security review, M3/S7).
 
+The checks and what they enforce are described in workflow_structure.py.
 Reads the workflow files with YAML aliases resolved (PyYAML), the way GitHub
-does, and checks properties that must survive every edit:
-
-- only the keyed 'review' job declares an environment;
-- a job without 'environment:' references no secret, except the one boolean
-  check in 'authorize' that the key is not a shared secret;
-- only 'publish' has a write permission;
-- no expression ('${{') inside any 'run:' script, in any workflow file;
-- 'review-keyless' runs the same steps as 'review' except the listed ones;
-- the keyed job's event backstop, concurrency group and per-call artifact
-  names.
+does, and the tracked files under agent-review/ (git ls-files).
 
 Offline. Run: python3 agent-review/tests/test-workflow-structure.py
 """
 
-import pathlib
 import sys
 
-import yaml
-
-ROOT = pathlib.Path(__file__).resolve().parents[2]
-WORKFLOWS = ROOT / ".github" / "workflows"
-REVIEW_WORKFLOW = WORKFLOWS / "agent-review.yml"
-
-# The only 'secrets.' reference allowed in a job without an environment.
-SHARED_KEY_CHECK = ("authorize", "Authorize", "HAS_SHARED_KEY", "${{ secrets.inference_api_key != '' }}")
-# Steps of 'review-keyless' that differ from those of 'review'.
-KEYLESS_DIFFERENT = {"Check the inference key": "Check the harness wire"}
+from workflow_structure import (
+    KEYLESS_DIFFERENT,
+    REVIEW_WORKFLOW,
+    SHARED_KEY_CHECK,
+    WORKFLOWS,
+    ast_problems,
+    call_site_problems,
+    entry_problems,
+    load,
+    python_word_problems,
+    repository,
+    shell_python_problems,
+    strings,
+    token_reach_problems,
+    tree_problems,
+)
 
 failures: list[str] = []
 
@@ -38,24 +35,13 @@ def check(condition: bool, message: str) -> None:
         failures.append(message)
 
 
-def strings(node, path=()):
-    """Yields (path, string) for every string value in a YAML tree."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            yield from strings(value, path + (str(key),))
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            yield from strings(value, path + (str(index),))
-    elif isinstance(node, str):
-        yield path, node
+def check_problems(problems: list[str], message: str) -> None:
+    check(not problems, message)
+    for problem in problems:
+        print(f"          {problem}")
 
 
-def load(path: pathlib.Path) -> dict:
-    with path.open() as f:
-        return yaml.safe_load(f)
-
-
-def check_runs_have_no_expressions(path: pathlib.Path) -> None:
+def check_runs_have_no_expressions(path) -> None:
     workflow = load(path)
     offenders = [
         f"{job_id}/{step.get('name', index)}"
@@ -167,6 +153,18 @@ def main() -> int:
 
     for path in sorted(WORKFLOWS.glob("*.yml")):
         check_runs_have_no_expressions(path)
+
+    repo = repository()
+    kinds = repo["kinds"]
+    print("agent-review/ (Python runtime rules, docs/adr/0003-python-runtime.md)")
+    print("  entry points: " + ", ".join(f"{name} ({kind})" for name, kind in sorted(kinds.items())))
+    check_problems(call_site_problems(workflow, kinds), "call sites: roots per job and step, call form per file")
+    check_problems(python_word_problems(workflow, kinds), "agent-review.yml: no other Python, no pip, no setup-python")
+    check_problems(shell_python_problems(repo["shell"], kinds), "shell files: Python only in the exact call form")
+    check_problems(entry_problems(repo["entries"], repo["lib"]), "bin/: bash scripts or the exact Python template")
+    check_problems(tree_problems(repo["index"]), "tree: no symlink, .pth, .pyc, __pycache__, *customize.py")
+    check_problems(ast_problems(repo["python"]), "Python: allowlisted imports, no dynamic code, no shell")
+    check_problems(token_reach_problems(repo["python"]), "token reach: agent_review.gh only from authorize, publish")
 
     print(f"{len(failures)} failed.")
     return 1 if failures else 0

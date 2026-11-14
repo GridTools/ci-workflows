@@ -18,3 +18,20 @@ repos:
         # Info-level notes (quoting in test assertions, sourced helpers) are
         # not failures.
         args: [--severity=warning]
+  # The agent review's Python code (agent-review/lib/, tests). Entry points in
+  # bin/ have no '.py' suffix and are checked against their fixed template
+  # by the structure test instead.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: ef6cf06c079dd6b299dfc720b0f14400c9d168e1 # frozen: v0.17.5
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+  # The runtime code only, which has no dependency; the self-test's 'python'
+  # job also checks the tests, with the hash-pinned requirements.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: ad26ebfa797fcb9b8f83275937c1c1d6e126719c # frozen: v2.4.1
+    hooks:
+      - id: mypy
+        files: ^agent-review/lib/
+        pass_filenames: false
+        args: [--config-file=pyproject.toml, agent-review/lib]
