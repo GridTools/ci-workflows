@@ -68,7 +68,7 @@ unrelated_kept() { assert "unrelated comments kept" test "$(jq -r '[.[] | select
 test_failure_no_existing() {
   setup
   run && assert "one new comment" test "$(failure_ids)" = 999 && unrelated_kept &&
-    assert "links the run" grep -qF "([log](${RUN_URL}), [docs](https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md))" comments.json &&
+    assert "links the run" grep -qF "([log](${RUN_URL}), [workflow docs](https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md))" comments.json &&
     assert "warning" grep -qF "::warning title=PR Agent failed::" log &&
     assert "notice" grep -qF "::notice::Posted failure comment 999." log
 }
@@ -105,7 +105,7 @@ test_cancelled_reports_nothing() {
   run && assert "untouched" test "$(failure_ids)" = 10 && assert "no API call" test ! -e calls && assert "notice" grep -qF "Nothing to report" log
 }
 test_step_cancelled_reports_nothing() { setup; export OUTCOME=cancelled; run && assert "no API call" test ! -e calls; }
-test_caller_docs_linked() { setup; export DOCS_URL=https://example.org/doc; run && assert "caller docs" grep -qF "[docs](https://example.org/doc)" comments.json; }
+test_caller_docs_linked() { setup; export DOCS_URL=https://example.org/doc; run && assert "caller and central docs" grep -qF "[docs](https://example.org/doc), [workflow docs](https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md))" comments.json; }
 test_invalid_pr() { setup; export PR='12/../1'; if bash "${PA_DIR}/bin/report-outcome" >log 2>&1; then return 1; fi; assert "error" grep -qF "Invalid pull request number" log; }
 
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do run_test "${t}"; done

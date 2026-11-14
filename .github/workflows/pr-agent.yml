@@ -281,7 +281,10 @@ jobs:
           OWN_SHA: ${{ job.workflow_sha }}
         run: *fetch-trusted-run
 
+      # Advisory: an API error here (say, deleting a comment another run
+      # already removed) must not turn the run red.
       - name: Report the PR Agent outcome on the PR
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

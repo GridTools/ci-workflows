@@ -119,6 +119,8 @@ def main() -> int:
     check("always()" in report["if"] and "needs.authorize.outputs.result == 'incomplete'" in report["if"],
           "'report' runs after a failed 'pr-agent' job, never after a dry run or a refusal")
 
+    report_step = next(s for s in report["steps"] if s["name"] == "Report the PR Agent outcome on the PR")
+    check(report_step.get("continue-on-error") is True, "the report step tolerates API errors")
     check(report.get("concurrency") == {"group": "pr-agent-report-${{ needs.authorize.outputs.pr }}",
                                          "cancel-in-progress": False},
           "'report' is serialized per pull request, never cancelled in progress")

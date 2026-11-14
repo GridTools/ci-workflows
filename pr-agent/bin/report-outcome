@@ -57,9 +57,11 @@ if [ "${state}" = success ]; then
 fi
 
 echo "::warning title=PR Agent failed::No review was posted. See the 'pr-agent' job's log."
-docs=${DOCS_URL:-${DOCS}}
+links="[log](${RUN_URL})"
+[ -z "${DOCS_URL}" ] || links+=", [docs](${DOCS_URL})"
+links+=", [workflow docs](${DOCS})"
 body="${MARKER}
-**PR Agent could not complete its last run** ([log](${RUN_URL}), [docs](${docs})). The review is advisory, so nothing needs to be done; a user with write access can retry with \`/review\`."
+**PR Agent could not complete its last run** (${links}). The review is advisory, so nothing needs to be done; a user with write access can retry with \`/review\`."
 if [ -n "${existing}" ]; then
   gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="${body}" --silent
   echo "::notice::Updated failure comment ${existing}."
