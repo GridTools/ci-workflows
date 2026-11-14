@@ -18,6 +18,7 @@ from workflow_structure import (
     call_site_problems,
     collect_gate_problems,
     entry_problems,
+    host_path_problems,
     load,
     python_word_problems,
     repository,
@@ -164,6 +165,7 @@ def main() -> int:
     check_problems(call_site_problems(workflow, kinds), "call sites: roots per job and step, call form per file")
     check_problems(python_word_problems(workflow, kinds), "agent-review.yml: no other Python, no pip, no setup-python")
     check_problems(shell_python_problems(repo["shell"], kinds), "shell files: Python only in the exact call form")
+    check_problems(host_path_problems(workflow), "host calls of entry points: 'PATH: /usr/bin:/bin' on the step")
     check_problems(
         sandbox_output_problems(workflow, repo["shell"]["harnesses/common.sh"]),
         "sandbox output: prefixed, no carriage return, no legacy '##[' (awf steps and diag)",

@@ -287,6 +287,40 @@ def shell_python_problems(sources: Mapping[str, str], kinds: Mapping[str, str | 
     return problems
 
 
+# --- PATH on the host ------------------------------------------------------------------
+
+FIXED_PATH = "/usr/bin:/bin"
+# The trusted-host steps, where 'gh' is looked up on PATH: they must exist.
+FIXED_PATH_STEPS = (("authorize", "Authorize"), ("publish", "Render the review"), ("publish", "Publish the review"))
+
+
+def host_path_problems(workflow: Mapping[str, Any]) -> list[str]:
+    """Every step that calls an entry point on the host sets 'PATH: /usr/bin:/bin' (ADR 0004).
+
+    The runner's default PATH searches home directories first; on the
+    trusted host 'gh' is found on PATH. Calls inside AWF (the step runs
+    '"${AWF_BIN}"') are exempt: there PATH is the sandbox's own.
+    """
+    problems = []
+    seen = set()
+    for job_id, job in workflow["jobs"].items():
+        for step in job.get("steps", []):
+            script = step.get("run", "")
+            if PYTHON_CALL not in script or '"${AWF_BIN}"' in script:
+                continue
+            name = step.get("name", "")
+            seen.add((job_id, name))
+            path = (step.get("env") or {}).get("PATH")
+            if path != FIXED_PATH:
+                problems.append(
+                    f"{job_id}/{name}: calls an entry point on the host with PATH {path!r}, not {FIXED_PATH!r}"
+                )
+    problems += [
+        f"{job}/{name}: no host call of an entry point" for job, name in FIXED_PATH_STEPS if (job, name) not in seen
+    ]
+    return problems
+
+
 # --- Sandbox output ------------------------------------------------------------------
 
 # Every line of AWF's output goes through exactly this filter: carriage

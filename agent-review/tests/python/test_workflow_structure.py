@@ -565,3 +565,47 @@ def test_collect_gate_in_the_real_workflow_is_required() -> None:
             if step.get("name") == "Collect the result":
                 step["if"] = step["if"].replace(" && steps.teardown.outcome == 'success'", "")
     assert len(ws.collect_gate_problems(workflow)) == 2
+
+
+# --- PATH on the host ------------------------------------------------------------------
+
+
+def host_steps(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if ws.PYTHON_CALL in step.get("run", "") and '"${AWF_BIN}"' not in step.get("run", "")
+    ]
+
+
+def test_real_host_paths_pass() -> None:
+    assert ws.host_path_problems(WORKFLOW) == []
+    names = {step["name"] for step in host_steps(WORKFLOW)}
+    assert {"Authorize", "Render the review", "Publish the review", "Collect the result"} <= names
+
+
+@pytest.mark.parametrize("name", ["Authorize", "Render the review", "Publish the review", "Collect the result"])
+@pytest.mark.parametrize("path", [None, "/usr/local/bin:/usr/bin:/bin", "/usr/bin", ""])
+def test_host_call_without_the_fixed_path_fails(name: str, path: str | None) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    for step in host_steps(workflow):
+        if step["name"] == name:
+            env = step.setdefault("env", {})
+            if path is None:
+                env.pop("PATH", None)  # the review jobs share this step (a YAML alias)
+            else:
+                env["PATH"] = path
+    found = ws.host_path_problems(workflow)
+    assert any(f"/{name}: calls an entry point on the host with PATH" in p for p in found), found
+
+
+def test_awf_steps_are_exempt_and_a_missing_host_step_fails() -> None:
+    # The AWF steps call run-review inside the sandbox and set no PATH.
+    awf = [s for j in WORKFLOW["jobs"].values() for s in j.get("steps", []) if '"${AWF_BIN}"' in s.get("run", "")]
+    assert awf and all("PATH" not in (s.get("env") or {}) for s in awf)
+    workflow = copy.deepcopy(WORKFLOW)
+    workflow["jobs"]["authorize"]["steps"] = [
+        s for s in workflow["jobs"]["authorize"]["steps"] if s.get("name") != "Authorize"
+    ]
+    assert ws.host_path_problems(workflow) == ["authorize/Authorize: no host call of an entry point"]
