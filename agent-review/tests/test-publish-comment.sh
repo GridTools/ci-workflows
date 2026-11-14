@@ -9,7 +9,7 @@ set -uo pipefail
 PC="${BIN_DIR}/publish-comment"
 ZWJ=$'\xe2\x80\x8d'
 ZWSP=$'\xe2\x80\x8b'
-RUN_URL="https://github.com/example-org/gt4py/actions/runs/1"
+RUN_URL="https://github.com/example-org/example/actions/runs/1"
 SHA=0123456789abcdef0123456789abcdef01234567
 
 sanitize() { bash "${PC}" sanitize; }
@@ -21,7 +21,7 @@ render() {
 
 test_neutralises_mentions() {
   local out
-  out=$(printf 'Ping @some-user and @GridTools/gt4py-core, mail a@b.org.\n' | sanitize) &&
+  out=$(printf 'Ping @some-user and @example-org/core-team, mail a@b.org.\n' | sanitize) &&
     assert "no live mention left" lacks '@[A-Za-z0-9]' "${out}" &&
     assert "mention kept readable" grep -qF "@${ZWJ}some-user" <<<"${out}"
 }
@@ -152,7 +152,7 @@ post() {
   echo "<!-- agent-review:stub -->" >body.md
   echo "text" >>body.md
   FAKE_DIR="${TMP}" PATH="${TMP}/bin:${PATH}" \
-    bash "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null
+    bash "${PC}" post --repo example-org/example --pr 9 --harness stub --body-file body.md >/dev/null
 }
 
 test_post_updates_own_marked_comment() {
@@ -163,7 +163,7 @@ test_post_updates_own_marked_comment() {
     $'14\tgithub-actions[bot]\t<!-- agent-review:opencode -->' \
     $'15\tgithub-actions[bot]\t<!-- agent-review:stub -->')"
   post &&
-    assert "PATCHed comment 15" grep -q "^PATCH repos/example-org/gt4py/issues/comments/15$" requests.log
+    assert "PATCHed comment 15" grep -q "^PATCH repos/example-org/example/issues/comments/15$" requests.log
 }
 
 test_post_creates_comment_without_marker_match() {
@@ -171,7 +171,7 @@ test_post_creates_comment_without_marker_match() {
     $'11\tsome-user\t<!-- agent-review:stub -->' \
     $'12\tgithub-actions[bot]\t## PR Reviewer Guide')"
   post &&
-    assert "POSTed a new comment" grep -q "^POST repos/example-org/gt4py/issues/9/comments$" requests.log &&
+    assert "POSTed a new comment" grep -q "^POST repos/example-org/example/issues/9/comments$" requests.log &&
     assert "body sent as JSON" grep -qF '"body":"<!-- agent-review:stub -->\ntext\n"' requests.log
 }
 
@@ -186,7 +186,7 @@ test_post_refuses_body_without_marker() {
   install_fake_gh ""
   echo "no marker" >body.md
   ! FAKE_DIR="${TMP}" PATH="${TMP}/bin:${PATH}" \
-    bash "${PC}" post --repo example-org/gt4py --pr 9 --harness stub --body-file body.md >/dev/null 2>&1
+    bash "${PC}" post --repo example-org/example --pr 9 --harness stub --body-file body.md >/dev/null 2>&1
 }
 
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do run_test "$t"; done

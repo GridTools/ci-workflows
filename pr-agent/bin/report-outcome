@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# The 'report' job of PR Agent: keeps at most one failure comment on the PR.
+# A run started by a comment attaches its check to the default branch, not
+# to the PR, and an automatic run's check stays green, so a failure is
+# otherwise invisible on the PR.
+#
+# Usage: report-outcome   (configuration in the environment, see below)
+#
+# Environment:
+#   REPO PR       the caller repository and the pull request number
+#   JOB_RESULT    needs.pr-agent.result
+#   OUTCOME       the 'Run PR Agent' step's outcome (before continue-on-error)
+#   RUN_URL       this run
+#   DOCS_URL      the caller's documentation (validated by 'authorize'), or ''
+#
+# outcome success                  delete every failure comment
+# outcome failure, or job failure  update the newest failure comment (or
+#                                  create one) and delete the others; job
+#                                  failure covers an environment denial, an
+#                                  image pull failure and a missing key
+# anything else (cancelled)        nothing
+
+set -euo pipefail
+
+readonly DOCS=https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md
+# Byte-identical to the in-repository workflows' marker, so their comments
+# are cleaned up too.
+readonly MARKER='<!-- pr-agent-run-failed -->'
+for v in REPO PR JOB_RESULT OUTCOME RUN_URL DOCS_URL; do
+  declare -g "${v}=${!v-}"
+done
+[[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::Invalid repository '${REPO}'."; exit 1; }
+[[ "${PR}" =~ ^[1-9][0-9]{0,9}$ ]] || { echo "::error::Invalid pull request number '${PR}'."; exit 1; }
+
+if [ "${OUTCOME}" = success ]; then
+  state=success
+elif [ "${OUTCOME}" = failure ] || [ "${JOB_RESULT}" = failure ]; then
+  state=failure
+else
+  echo "::notice::Nothing to report (job '${JOB_RESULT}', step '${OUTCOME}')."
+  exit 0
+fi
+
+ids=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+  --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"${MARKER}\"))) | .id")
+existing=$(tail -n 1 <<<"${ids}")
+# Overlapping runs can each create one: keep at most the newest.
+for id in ${ids}; do
+  if [ "${state}" = success ] || [ "${id}" != "${existing}" ]; then
+    gh api -X DELETE "repos/${REPO}/issues/comments/${id}" --silent
+    echo "::notice::Deleted failure comment ${id}."
+  fi
+done
+if [ "${state}" = success ]; then
+  [ -n "${ids}" ] || echo "::notice::No failure comment to remove."
+  exit 0
+fi
+
+echo "::warning title=PR Agent failed::No review was posted. See the 'pr-agent' job's log."
+links="[log](${RUN_URL})"
+[ -z "${DOCS_URL}" ] || links+=", [docs](${DOCS_URL})"
+links+=", [workflow docs](${DOCS})"
+body="${MARKER}
+**PR Agent could not complete its last run** (${links}). The review is advisory, so nothing needs to be done; a user with write access can retry with \`/review\`."
+if [ -n "${existing}" ]; then
+  gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="${body}" --silent
+  echo "::notice::Updated failure comment ${existing}."
+else
+  id=$(gh api "repos/${REPO}/issues/${PR}/comments" -f body="${body}" --jq .id)
+  echo "::notice::Posted failure comment ${id}."
+fi

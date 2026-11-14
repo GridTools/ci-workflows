@@ -5,7 +5,7 @@
 - **Created**: 2026-11-13
 - **Updated**: 2026-11-13 (security review of PR 1: keyed/keyless split, endpoint allowlist, caller test mode, release integrity)
 
-Why-statement: In the context of the sandboxed agent PR review ([ADR 0001](0001-sandboxed-agent-pr-review.md)), facing the need to use it in several repositories of different organizations (GT4Py in GridTools, icon4py in C2SM) without copying a security-reviewed, 700-line workflow and its scripts into each, we decided to publish it as a reusable workflow (`on: workflow_call`) in the public repository GridTools/ci-workflows, called by a small workflow in each repository pinned by commit SHA, to achieve one reviewed implementation with per-repository configuration and keys. We considered keeping a copy per repository and a composite action, and accept that every caller must configure its own environment, key, label and event policy, and that a central change reaches a caller only through a reviewed pin update.
+Why-statement: In the context of the sandboxed agent PR review ([ADR 0001](0001-sandboxed-agent-pr-review.md)), facing the need to use it in several repositories of different organizations without copying a security-reviewed, 700-line workflow and its scripts into each, we decided to publish it as a reusable workflow (`on: workflow_call`) in the public repository GridTools/ci-workflows, called by a small workflow in each repository pinned by commit SHA, to achieve one reviewed implementation with per-repository configuration and keys. We considered keeping a copy per repository and a composite action, and accept that every caller must configure its own environment, key, label and event policy, and that a central change reaches a caller only through a reviewed pin update.
 
 ## Context
 
@@ -33,7 +33,7 @@ Why-statement: In the context of the sandboxed agent PR review ([ADR 0001](0001-
 - A caller's workflow is about 50 lines; its adopter checklist is in [agent-review.md](../agent-review.md#required-settings-in-the-calling-repository).
 - The repository is now part of every caller's supply chain: its `main` is protected (pull request with an approval, linear history, no force pushes or deletions) and it requires SHA-pinned actions. That protection does not cover what callers pin: tags and releases need their own ruleset and immutability, the self-test must be a required status check, and a commit that exists only in a fork resolves through this repository's name, so callers must check that a pin is on `main`. A check inside the workflow cannot replace the caller's check, because the pinned commit supplies the workflow file. Its owners should be more than one person before the first release.
 - Adding a permission to any job breaks every caller at startup; this is deliberate.
-- Organizations with an allowlist of actions or reusable workflows must allow this repository. Cross-organization behaviour (C2SM → GridTools) and GitHub's workflow lockfile protection are not verified yet.
+- Organizations with an allowlist of actions or reusable workflows must allow this repository. Calls from another organization and GitHub's workflow lockfile protection are not verified yet.
 - `job.workflow_sha` is not available on GitHub Enterprise Server; this repository targets github.com only.
 
 ## Alternatives considered

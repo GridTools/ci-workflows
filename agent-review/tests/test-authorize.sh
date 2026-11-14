@@ -242,7 +242,7 @@ test_prt_other_actions_are_skipped() {
 }
 test_prt_rejects_test_repository() {
   setup_prt labeled
-  export IN_HARNESS=stub REPO=${CENTRAL} IN_TEST_REPO=GridTools/gt4py
+  export IN_HARNESS=stub REPO=${CENTRAL} IN_TEST_REPO=example-org/fixture
   denied "not supported under 'pull_request_target'"
 }
 test_writer_levels() {
@@ -289,7 +289,7 @@ test_pull_request_keyed_is_rejected() {
 }
 test_pull_request_test_repository_from_caller() {
   setup
-  export EVENT=pull_request IN_HARNESS=stub IN_TEST_REPO=GridTools/gt4py
+  export EVENT=pull_request IN_HARNESS=stub IN_TEST_REPO=example-org/fixture
   denied "is for the self-test of ${CENTRAL}"
 }
 test_push_and_schedule_are_self_test_only() {
@@ -302,16 +302,16 @@ test_push_and_schedule_are_self_test_only() {
     export EVENT=${e} IN_HARNESS=opencode REPO=${CENTRAL}
     denied "runs the 'stub' harness only" || return 1
     setup
-    export EVENT=${e} IN_HARNESS=stub REPO=${CENTRAL} IN_TEST_REPO=GridTools/gt4py IN_PR=2983
+    export EVENT=${e} IN_HARNESS=stub REPO=${CENTRAL} IN_TEST_REPO=example-org/fixture IN_PR=2983
     allowed || return 1
     assert "forced dry run (${e})" test "$(out dry_run)" = true || return 1
-    assert "source repo (${e})" test "$(out source_repo)" = GridTools/gt4py || return 1
-    assert "resolved in the test repository" grep -qF "repos/GridTools/gt4py/pulls/2983" gh.log || return 1
+    assert "source repo (${e})" test "$(out source_repo)" = example-org/fixture || return 1
+    assert "resolved in the test repository" grep -qF "repos/example-org/fixture/pulls/2983" gh.log || return 1
   done
 }
 test_self_test_pull_request_has_no_caller_notice() {
   setup
-  export EVENT=pull_request IN_HARNESS=stub REPO=${CENTRAL} IN_TEST_REPO=GridTools/gt4py IN_PR=2983
+  export EVENT=pull_request IN_HARNESS=stub REPO=${CENTRAL} IN_TEST_REPO=example-org/fixture IN_PR=2983
   allowed && assert "no caller notice" test "$(grep -c 'Caller test mode' log)" -eq 0
 }
 test_other_events_are_rejected() {
@@ -324,17 +324,17 @@ test_other_events_are_rejected() {
 }
 test_test_repository_from_another_repository() {
   setup
-  export IN_HARNESS=stub IN_TEST_REPO=GridTools/gt4py
+  export IN_HARNESS=stub IN_TEST_REPO=example-org/fixture
   denied "Input test_repository is for the self-test"
 }
 test_test_repository_with_keyed_harness_in_central() {
   setup
-  export REPO=${CENTRAL} IN_TEST_REPO=GridTools/gt4py
+  export REPO=${CENTRAL} IN_TEST_REPO=example-org/fixture
   denied "Input test_repository is for the self-test"
 }
 test_test_repository_dispatch_forces_dry_run() {
   setup
-  export REPO=${CENTRAL} IN_HARNESS=stub IN_TEST_REPO=GridTools/gt4py IN_PR=2983
+  export REPO=${CENTRAL} IN_HARNESS=stub IN_TEST_REPO=example-org/fixture IN_PR=2983
   allowed && assert "forced dry run" test "$(out dry_run)" = true
 }
 test_invalid_trusted_location() {
