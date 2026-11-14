@@ -184,6 +184,18 @@ jobs:
           echo "e2e='${E2E}' result='${RESULT}' head_sha='${HEAD_SHA}' comment_url='${COMMENT_URL}'"
           [ "${E2E}" = success ] && [ "${RESULT}" = dry-run ] && [ "${HEAD_SHA}" = "${FIXTURE_HEAD_SHA}" ] && [ -z "${COMMENT_URL}" ]
 
+      # 'Publish the review' in agent-review.yml runs only for a real post,
+      # which the self-test never makes: check on the same runner image that
+      # its fixed PATH finds the runner's gh.
+      - name: The publish step's fixed PATH finds gh
+        env:
+          PATH: /usr/bin:/bin
+        run: |
+          gh_path=$(command -v gh)
+          echo "gh under PATH=${PATH}: ${gh_path}"
+          [ "${gh_path}" = /usr/bin/gh ]
+          gh --version
+
       - name: The keyless job ran the sandbox as configured
         env:
           GH_TOKEN: ${{ github.token }}
