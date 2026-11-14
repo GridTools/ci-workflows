@@ -14,7 +14,8 @@ and which environment it gets depend on the trust zone the caller runs in
     environment, plus the caller's overrides (the forced ``GIT_*``
     settings). An inherited ``GIT_ALLOW_PROTOCOL`` reaches git.
 ``TAINTED_HOST``
-    ``collect-result``, on the host after the sandbox has run: the program
+    On the host after the sandbox has run (``collect-result``, which starts
+    no process at all): the program
     must be an absolute path under ``/usr/bin`` or ``/bin``, and the
     environment is fixed (``FIXED_ENV`` plus overrides, never ``PATH``):
     ``~/.local/bin`` and the like may hold planted programs.

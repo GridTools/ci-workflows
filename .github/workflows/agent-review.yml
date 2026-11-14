@@ -624,7 +624,7 @@ jobs:
         shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
         env:
           PATH: /usr/bin:/bin
-        run: /usr/bin/bash /opt/agent-review/bin/collect-result "${WS}/out" "${RUNNER_TEMP}/result"
+        run: /usr/bin/python3 -I -S -B /opt/agent-review/bin/collect-result "${WS}/out" "${RUNNER_TEMP}/result"
 
       - &upload-result
         name: Upload the result

@@ -67,7 +67,7 @@ KEYLESS_DIFFERENT = {"Check the inference key": "Check the harness wire"}
 
 # --- Entry points ----------------------------------------------------------
 
-# collect-result uses the absolute one: it runs on the tainted host.
+# The absolute one is for scripts on the tainted host (collect-result was one).
 BASH_SHEBANGS = ("#!/usr/bin/env bash", "#!/usr/bin/bash")
 PYTHON_CALL = "/usr/bin/python3 -I -S -B"
 ENTRY_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}", re.ASCII)
