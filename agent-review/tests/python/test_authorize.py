@@ -410,6 +410,35 @@ def test_pull_request_target_actions() -> None:
             Lookups().decide({**base, "ACTION": action})
 
 
+@pytest.mark.parametrize("actor", ["a/b", "-x", "x[bot]x", "a" * 40, "a" * 40 + "[bot]"])
+def test_an_invalid_actor_fails_before_the_permission_lookup(actor: str) -> None:
+    lookups = Lookups()
+    with pytest.raises(Fail, match=re.escape(f"Invalid actor '{actor}'.")):
+        lookups.decide(dispatch_env(ACTOR=actor))
+    assert [c[0] for c in lookups.calls] == ["pr"]
+    lookups = Lookups()
+    prt = dispatch_env(
+        EVENT="pull_request_target",
+        ACTION="labeled",
+        EVENT_LABEL="agent-review",
+        SENDER=actor,
+        EVENT_PR="12",
+        EVENT_HEAD_SHA=HEAD,
+        EVENT_BASE_SHA=BASE,
+        IN_PR="",
+    )
+    with pytest.raises(Fail, match="Invalid actor"):
+        lookups.decide(prt)
+    assert lookups.calls == []
+
+
+def test_entry_point_invalid_actor_makes_no_permission_call(tmp_path: pathlib.Path) -> None:
+    result = run_entry(tmp_path, {"ACTOR": "a/b"}, tmp_path)
+    assert result.returncode == 1
+    assert b"::error::Invalid actor 'a/b'." in result.stdout
+    assert "collaborators" not in (tmp_path / "gh.log").read_text()
+
+
 def test_stub_events() -> None:
     env = dispatch_env(EVENT="pull_request", IN_HARNESS="stub", IN_MODEL="", IN_PR="", EVENT_PR="12")
     lookups = Lookups()
@@ -423,22 +452,39 @@ def test_stub_events() -> None:
         with pytest.raises(Fail, match=f"Event '{event}' is for the self-test of GridTools/ci-workflows only"):
             Lookups().decide({**env, "EVENT": event})
         out = Lookups().decide(
-            {**env, "EVENT": event, "REPO": "GridTools/ci-workflows", "IN_TEST_REPO": "GridTools/gt4py"}
+            {**env, "EVENT": event, "REPO": "GridTools/ci-workflows", "IN_TEST_REPO": "other-org/other"}
         )
-        assert (out["source_repo"], out["dry_run"]) == ("GridTools/gt4py", "true")
+        assert (out["source_repo"], out["dry_run"]) == ("other-org/other", "true")
     for event in ("", "issue_comment", "PUSH"):
         with pytest.raises(Fail, match="Unexpected event"):
             Lookups().decide({**env, "EVENT": event})
 
 
 def test_test_repository_rule() -> None:
-    central = {"REPO": "GridTools/ci-workflows", "IN_TEST_REPO": "GridTools/gt4py"}
+    central = {"REPO": "GridTools/ci-workflows", "IN_TEST_REPO": "other-org/other"}
     with pytest.raises(Fail, match="is for the self-test"):
-        Lookups().decide(dispatch_env(IN_TEST_REPO="GridTools/gt4py"))
+        Lookups().decide(dispatch_env(IN_TEST_REPO="other-org/other"))
     with pytest.raises(Fail, match="is for the self-test"):
         Lookups().decide(dispatch_env(**central))  # keyed
     out = Lookups().decide(dispatch_env(IN_HARNESS="stub", **central))
-    assert (out["source_repo"], out["dry_run"]) == ("GridTools/gt4py", "true")
+    assert (out["source_repo"], out["dry_run"]) == ("other-org/other", "true")
+    for action in ("labeled", "opened"):
+        lookups = Lookups()
+        with pytest.raises(Fail, match="not supported under 'pull_request_target'"):
+            lookups.decide(
+                dispatch_env(
+                    IN_HARNESS="stub",
+                    EVENT="pull_request_target",
+                    ACTION=action,
+                    EVENT_LABEL="agent-review",
+                    EVENT_PR="12",
+                    EVENT_HEAD_SHA=HEAD,
+                    EVENT_BASE_SHA=BASE,
+                    IN_PR="",
+                    **central,
+                )
+            )
+        assert lookups.calls == []
     with pytest.raises(Fail, match="Invalid test_repository"):
         Lookups().decide(dispatch_env(IN_HARNESS="stub", REPO="GridTools/ci-workflows", IN_TEST_REPO="a/b/c"))
 
