@@ -174,10 +174,13 @@ def test_launcher_runs_python_entry_points_with_the_production_command_line(tmp_
     assert result.stdout.decode().splitlines() == [*PYTHON_CALL, str(BIN_DIR / "probe")]
 
 
-def test_launcher_runs_bash_scripts_with_bash() -> None:
-    for name in ("authorize", "collect-result"):
-        result = launcher('entry_command "$1" && printf "%s\\n" "${ENTRY_CMD[@]}"', str(BIN_DIR / name))
-        assert result.stdout.decode().splitlines() == ["/usr/bin/bash", str(BIN_DIR / name)]
+@pytest.mark.parametrize("shebang", ["#!/usr/bin/env bash", "#!/usr/bin/bash"])
+def test_launcher_runs_bash_scripts_with_bash(shebang: str, tmp_path: pathlib.Path) -> None:
+    script = tmp_path / "script"
+    script.write_text(f'{shebang}\necho "bash $# $1"\n')
+    result = launcher('entry_command "$1" && printf "%s\\n" "${ENTRY_CMD[@]}"', str(script))
+    assert result.stdout.decode().splitlines() == ["/usr/bin/bash", str(script)]
+    assert launcher('run_entry "$1" "a b"', str(script)).stdout == b"bash 1 a b\n"
 
 
 def test_launcher_refuses_other_files(tmp_path: pathlib.Path) -> None:

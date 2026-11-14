@@ -33,7 +33,8 @@ Python (docs/adr/0003-python-runtime.md):
   lib/ holds only agent_review/, and that only '.py' files;
 - imports (AST) of lib/ and the Python entry points: only the allowlisted
   standard-library modules and agent_review.*; no eval/exec/compile/
-  __import__/breakpoint, no os.system/os.popen/os.exec*/os.spawn*/fork;
+  __import__/breakpoint, no os.system/os.popen/os.exec*/os.spawn*/fork
+  (nor 'import os as ...' or 'import *', which would hide them);
   subprocess only in agent_review/runner.py; no 'shell=' argument anywhere;
 - token reach: only the 'authorize' and 'publish-comment' entry points can
   import agent_review.gh, and only gh.py names the 'gh' program.
@@ -294,10 +295,12 @@ STDLIB_ALLOWED = frozenset(
         "errno",
         "functools",
         "hashlib",
+        "io",
         "itertools",
         "json",
         "math",
         "os",
+        "pathlib",
         "re",
         "secrets",
         "stat",
@@ -341,10 +344,14 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
             names: list[str] = []
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
+                # 'import os as o' would hide 'o.system' from the attribute rule.
+                problems += [f"{where}: 'import os as {a.asname}'" for a in node.names if a.name == "os" and a.asname]
             elif isinstance(node, ast.ImportFrom):
                 if node.level:
                     problems.append(f"{where}: relative import; use 'agent_review.<module>'")
                     continue
+                if any(a.name == "*" for a in node.names):
+                    problems.append(f"{where}: 'from {node.module} import *'")
                 names = [node.module or ""]
                 if node.module == "os":
                     problems += [f"{where}: os.{a.name}" for a in node.names if BANNED_OS.fullmatch(a.name)]
