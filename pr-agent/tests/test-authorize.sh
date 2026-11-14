@@ -159,21 +159,21 @@ test_unexpected_event() { setup; export EVENT=workflow_dispatch; denied "Unexpec
 test_push_without_test_pr() { setup; export EVENT=push REPO=${CENTRAL}; denied "Unexpected event 'push'"; }
 test_self_test() {
   setup
-  export EVENT=push REPO=${CENTRAL} IN_TEST_PR=GridTools/gt4py#2983
-  allowed && assert "forced dry run" test "$(out result)" = dry-run && assert "pr" test "$(out pr)" = 2983 &&
-    assert "fixture resolved" grep -qF "repos/GridTools/gt4py/pulls/2983" gh.log &&
+  export EVENT=push REPO=${CENTRAL} IN_TEST_PR=example-org/fixture#3
+  allowed && assert "forced dry run" test "$(out result)" = dry-run && assert "pr" test "$(out pr)" = 3 &&
+    assert "fixture resolved" grep -qF "repos/example-org/fixture/pulls/3" gh.log &&
     assert "no writer check" bash -c "! grep -q collaborators gh.log"
 }
 test_self_test_events() {
   local e
   for e in pull_request schedule workflow_dispatch; do
-    setup; export EVENT=${e} REPO=${CENTRAL} IN_TEST_PR=GridTools/gt4py#2983; allowed || return 1
+    setup; export EVENT=${e} REPO=${CENTRAL} IN_TEST_PR=example-org/fixture#3; allowed || return 1
   done
 }
-test_test_pr_from_caller() { setup; export IN_TEST_PR=GridTools/gt4py#2983; denied "Input test_pr is for the self-test of ${CENTRAL} only."; }
-test_test_pr_under_prt() { setup; export REPO=${CENTRAL} IN_TEST_PR=GridTools/gt4py#2983; denied "Input test_pr is not supported under 'pull_request_target'."; }
-test_test_pr_invalid() { setup; export EVENT=push REPO=${CENTRAL} IN_TEST_PR='GridTools/gt4py#0'; denied "Invalid test_pr"; }
-test_test_pr_api_error() { setup; export EVENT=push REPO=${CENTRAL} IN_TEST_PR=GridTools/gt4py#1 FAKE_GH_FAIL=1; denied "Could not resolve pull request GridTools/gt4py#1"; }
+test_test_pr_from_caller() { setup; export IN_TEST_PR=example-org/fixture#3; denied "Input test_pr is for the self-test of ${CENTRAL} only."; }
+test_test_pr_under_prt() { setup; export REPO=${CENTRAL} IN_TEST_PR=example-org/fixture#3; denied "Input test_pr is not supported under 'pull_request_target'."; }
+test_test_pr_invalid() { setup; export EVENT=push REPO=${CENTRAL} IN_TEST_PR='example-org/fixture#0'; denied "Invalid test_pr"; }
+test_test_pr_api_error() { setup; export EVENT=push REPO=${CENTRAL} IN_TEST_PR=example-org/fixture#1 FAKE_GH_FAIL=1; denied "Could not resolve pull request example-org/fixture#1"; }
 
 # --- Static inputs --------------------------------------------------------------------
 test_shared_key() { setup; export HAS_SHARED_KEY=true; denied "readable in a job without an environment" && assert "no API call" test ! -e gh.log; }
@@ -185,7 +185,7 @@ test_api_base_other() { setup; export IN_API_BASE=https://evil.example/v1; denie
 test_api_base_trailing_slash() { setup; export IN_API_BASE=${CSCS}/; denied "is not an allowed inference endpoint"; }
 test_docs_url() {
   setup
-  export IN_DOCS_URL=https://github.com/C2SM/icon4py/blob/main/docs/development/pr_agent.md#usage
+  export IN_DOCS_URL=https://github.com/example-org/example/blob/main/docs/pr_agent.md#usage
   allowed && assert "output" test "$(out docs_url)" = "${IN_DOCS_URL}"
 }
 test_docs_url_in_errors() {

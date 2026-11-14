@@ -17,8 +17,7 @@ and [PR Agent's](docs/pr-agent.md#release-checklist) release checklists.
 
 The agent review was designed and security-reviewed in GT4Py first; see
 [GridTools/gt4py#2985](https://github.com/GridTools/gt4py/pull/2985) for the
-design history. The PR Agent workflow is a port of icon4py's
-([C2SM/icon4py#1547](https://github.com/C2SM/icon4py/pull/1547)).
+design history.
 
 ## Using a workflow
 

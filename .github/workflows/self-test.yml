@@ -26,9 +26,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Head of the fixture (GridTools/gt4py PR 2983, set in the 'e2e' and
-  # 'pr-agent-e2e' inputs).
+  # Head of the fixture (GridTools/gt4py PR 2983, set in the 'e2e' inputs).
   FIXTURE_HEAD_SHA: 46e9c4f3cecc6571b36b219994f8b126602513ff
+  # Head of PR Agent's fixture (this repository's PR 1, set in the
+  # 'pr-agent-e2e' inputs).
+  PR_AGENT_FIXTURE_HEAD_SHA: b259354abbac0ccabffb1bf027d71fa66f0385a8
 
 jobs:
   lint:
@@ -164,7 +166,7 @@ jobs:
       fallback_models: "Qwen/Qwen3.8-Flash-Next-FP8, Qwen/Qwen3.8-27B-FP8"
       ai_timeout: "600"
       docs_url: https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md#testing-changes
-      test_pr: GridTools/gt4py#2983
+      test_pr: GridTools/ci-workflows#1
 
   pr-agent-check:
     needs: pr-agent-e2e
@@ -208,7 +210,7 @@ jobs:
             sleep $((i * 5))
           done
           log="${RUNNER_TEMP}/authorize.log"
-          expect "the fixture was resolved" grep -qF "Self-test against GridTools/gt4py#2983 at ${FIXTURE_HEAD_SHA}" "${log}"
+          expect "the fixture was resolved" grep -qF "Self-test against GridTools/ci-workflows#1 at ${PR_AGENT_FIXTURE_HEAD_SHA}" "${log}"
           expect "the chain was derived" grep -qF "Model 'openai/zai-org/GLM-5.3-Flash', fallbacks [\"openai/Qwen/Qwen3.8-Flash-Next-FP8\",\"openai/Qwen/Qwen3.8-27B-FP8\"]; context window 262144, output reserve 100000, 600 s per model, 32 min for the chain." "${log}"
 
           n=$(gh api "repos/${REPO}/deployments?sha=${COMMIT}" --jq length)

@@ -5,7 +5,7 @@ The reusable `PR Agent` workflow ([`.github/workflows/pr-agent.yml`](../.github/
 An adopting repository adds a small **caller workflow** that calls this one pinned by commit SHA, and keeps its own triggers, environment, key, event policy, `.pr_agent.toml` and review rules. The design is in [ADR 0003](adr/0003-pr-agent-reusable-workflow.md).
 
 > [!WARNING]
-> **Pre-release.** The workflow is a port of C2SM/icon4py's in-repository workflow (icon4py PR 1547, four live runs there), which ran PR Agent in production. This reusable form has run only through this repository's self-test (a local call in dry run, which never starts the keyed job), plus the caller tests recorded in the PR that added it. It ships in `v0.1.0` together with the agent review, after the [release checklist](#release-checklist). Not observed yet: what a deployment of the `pr-agent` job shows on a PR timeline under `pull_request_target` and `issue_comment`; a call across organizations (C2SM → GridTools) under those events.
+> **Pre-release.** This workflow has run only through this repository's self-test (a local call in dry run, which never starts the keyed job), plus the caller tests recorded in the PR that added it. It ships in `v0.1.0` together with the agent review, after the [release checklist](#release-checklist). Not observed yet: what a deployment of the `pr-agent` job shows on a PR timeline under `pull_request_target` and `issue_comment`; a call from another organization under those events.
 
 ## Calling it
 
@@ -126,18 +126,18 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 ## Configuration notes
 
 - Model ids are stored without the `openai/` prefix, which selects LiteLLM's OpenAI-compatible route. CSCS retires models on short notice; check them against the [model table](https://docs.cscs.ch/services/inference/api/).
-- The token limits apply to every model in the chain, so they must fit the smallest one: the output reserve is sent as `max_tokens`, which a model with a lower output limit rejects. Too small an output reserve makes reasoning models return empty responses (`finish_reason: length`; 32768 was too small for GLM in GT4Py). Check a fallback before adding it, since it is only reached when the models before it fail.
+- The token limits apply to every model in the chain, so they must fit the smallest one: the output reserve is sent as `max_tokens`, which a model with a lower output limit rejects. Too small an output reserve makes reasoning models return empty responses (`finish_reason: length`; 32768 was too small for GLM models). Check a fallback before adding it, since it is only reached when the models before it fail.
 - The step limit is `ceil(chain × ai_timeout / 60) + 2` minutes, so a model that times out is not retried: the next one is tried. `Resolve models` rejects a chain whose step limit plus two minutes exceeds the job's 45 minutes, since a job timeout is a cancellation, which `continue-on-error` does not cover. A rejected request (429, 5xx) is retried twice on the same model first (`num_retries`); slow rejections can still use up the step limit, which the failure comment then reports.
 - `enable_large_pr_chunking` in `.pr_agent.toml` sends the chunks in parallel, so it does not extend the step time.
 - `output_run_details = true` in `.pr_agent.toml` makes the review name the model that answered, so a fallback answer is visible.
-- Live runs in icon4py took 89–162 s with `GLM-5.3-Flash` and 13–17k input tokens.
+- Typical runs take 1.5–3 minutes with `GLM-5.3-Flash` and 13–17k input tokens.
 
 ### Reading a run's log
 
 - `Applying repo settings (sections: [...])` means `.pr_agent.toml` was applied; the bare `Applying repo settings` appears in every run.
 - A `403` on `GET /user` ("Could not resolve the GitHub user login") is harmless.
 - `repo_context_files` are always read from the default branch (the PR's base); missing files are skipped. `PR_AGENT_CONFIG_BRANCH` does not affect them.
-- Cross-repository references such as `GridTools/gt4py#2982` are misread as local issues and log a 404 or a sibling-allowlist warning; harmless.
+- Cross-repository references such as `other-org/other-repo#12` are misread as local issues and log a 404 or a sibling-allowlist warning; harmless.
 
 ## Testing changes
 
@@ -146,7 +146,7 @@ This repository's [`self-test.yml`](../.github/workflows/self-test.yml) runs on 
 - pre-commit (actionlint, shellcheck) and zizmor on the workflows;
 - the script tests: [`test-authorize.sh`](../pr-agent/tests/test-authorize.sh) (permission levels, API errors, the event matrix, allowed and refused commands, long comments), [`test-command-filter.py`](../pr-agent/tests/test-command-filter.py) (differential, against PR Agent 0.50.0's parser), [`test-resolve-models.sh`](../pr-agent/tests/test-resolve-models.sh) (every validation and the derived timeout), [`test-report-outcome.sh`](../pr-agent/tests/test-report-outcome.sh) (0, 1 and several comments, success and failure, job results) and the [structure test](../pr-agent/tests/test-workflow-structure.py);
 - that the pinned image digest exists, and a warning if its tag has moved;
-- the keyless path through a **local** call with `test_pr` (a fixed public GT4Py PR, forced dry run): `authorize` and `Resolve models` run on the commit under test, `pr-agent` and `report` are skipped, and no deployment is recorded.
+- the keyless path through a **local** call with `test_pr` (this repository's merged PR 1, forced dry run): `authorize` and `Resolve models` run on the commit under test, `pr-agent` and `report` are skipped, and no deployment is recorded.
 
 PR Agent itself never runs here: this repository holds no key.
 
