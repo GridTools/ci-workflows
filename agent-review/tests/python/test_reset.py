@@ -148,6 +148,7 @@ def test_path_checks(path: str, tree: bool, plain: bool) -> None:
 
 def make_root(
     tmp: pathlib.Path,
+    *,
     rules: str = "",
     extra: str = "",
     addendum: bytes = b"",
@@ -169,7 +170,7 @@ def test_load_config(tmp_path: pathlib.Path) -> None:
         b"Follow `docs/style.md`, `b.yml`, `c.yaml`, `CODING.md` and `docs/style.md`;\n"
         b"not `two words.md`, `x.py`, ``, `a.md\nb.md` or `.md`. Also `x.jsonc`, `y.mdc`.\n"
     )
-    config = reset.load_config(make_root(tmp_path, "CODING.md\n", "docs/\n", addendum))
+    config = reset.load_config(make_root(tmp_path, rules="CODING.md\n", extra="docs/\n", addendum=addendum))
     assert config.rule_files == ("CODING.md",)
     assert config.reset_patterns == ("AGENTS.md", "docs/", "CODING.md")
     assert config.addendum == addendum
@@ -189,9 +190,9 @@ def test_load_config_rejects_a_placeholder_in_the_addendum(tmp_path: pathlib.Pat
 
 def test_load_config_checks_rule_files_first(tmp_path: pathlib.Path) -> None:
     with pytest.raises(Fatal, match=re.escape("'../etc/passwd'")):
-        reset.load_config(make_root(tmp_path, "../etc/passwd\n", "/abs\n"))
+        reset.load_config(make_root(tmp_path, rules="../etc/passwd\n", extra="/abs\n"))
     with pytest.raises(Fatal, match="'/abs'"):
-        reset.load_config(make_root(tmp_path / "2", "ok.md\n", "/abs\n"))
+        reset.load_config(make_root(tmp_path / "2", rules="ok.md\n", extra="/abs\n"))
 
 
 # --- Coverage (git pathspecs on a scratch index) ------------------------------------
