@@ -387,6 +387,31 @@ def _base_link_hop(git: Git, repo_dir: str, base_sha: str, path: str) -> list[st
     return [*parent[: len(parent) - climb], *rest]
 
 
+def _is_base_gitlink(git: Git, repo_dir: str, base_sha: str, path: str) -> bool:
+    """Whether the gitlink ``path`` is the base commit's own, with nothing checked out there.
+
+    Such a submodule is harmless: submodules are never fetched
+    (``submodule.recurse=false``), so its directory is empty. A PR's added
+    or changed gitlink is replaced by the reset (layer a); if one remained,
+    its commit would differ from the base's.
+    """
+    base = _parse_ls_tree(git.output("ls-tree", "-z", "--full-tree", base_sha, "--", path))
+    if base is None or base[:2] != ("160000", "commit") or base[3] != path:
+        return False
+    records = [r for r in git.output("ls-files", "-s", "-z", "--", f":(literal){path}").split(b"\0") if r]
+    if len(records) != 1:
+        return False
+    meta, _, name = records[0].partition(b"\t")
+    fields = meta.decode("ascii", errors="replace").split(" ")
+    if os.fsdecode(name) != path or len(fields) != 3 or fields[0] != "160000" or fields[1] != base[2]:
+        return False
+    full = os.path.join(repo_dir, path)
+    try:
+        return stat.S_ISDIR(os.lstat(full).st_mode) and not os.listdir(full)
+    except OSError:
+        return False
+
+
 def _resolve_base_link(git: Git, repo_dir: str, base_sha: str, path: str, seen: list[str]) -> str | None:
     """The real repository path the base symlink ``path`` leads to, or None.
 
@@ -459,7 +484,9 @@ def verify_no_linked_directories(
     directory a file pattern goes through, whose other files are not
     reset). A PR's symlink never qualifies (the reset replaces it), and a
     base symlink to anything else would let the agent read files the PR
-    changes. Matching is git's (scratch indexes).
+    changes. A gitlink passes only if it is the base commit's own (same
+    path, same commit) and its directory is empty (``_is_base_gitlink``).
+    Matching is git's (scratch indexes).
     """
     linked = _linked_paths(git, repo_dir)
     if not linked:
@@ -471,6 +498,10 @@ def verify_no_linked_directories(
     with Coverage(scratch_parent, env, ()) as coverage:
         try:
             for path in coverage.matching(linked, link_specs):
+                if not os.path.islink(os.path.join(repo_dir, path)):  # a gitlink
+                    if not _is_base_gitlink(git, repo_dir, base_sha, path):
+                        refused.append((path, None))
+                    continue
                 target = _resolve_base_link(git, repo_dir, base_sha, path, [])
                 if target is None:
                     refused.append((path, None))

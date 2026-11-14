@@ -850,3 +850,54 @@ def test_missing_or_empty_central_list_fails_closed(
     expected = "Cannot read" if central is None else "holds no reset pattern"
     assert expected in log and "instruction-files.txt" in log, log
     assert not (ws / "prompt.md").exists()
+
+
+# --- Base submodules at instruction directories (final security review R2) -------------------
+
+BASE_GITLINK = {**FORK, ".agents/skills/s/SKILL.md": "base skill\n", ".claude/skills/x": "gitlink " + "2" * 40}
+
+
+def index_entry(repo: pathlib.Path, path: str) -> bytes:
+    from run_review_fixtures import git
+
+    return git(repo, "ls-files", "-s", "--", path)
+
+
+def test_base_gitlink_at_an_instruction_directory_passes(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    """A base submodule there is an empty directory (never fetched): the review runs."""
+    ws, log = fetch(tmp_path, upstream, BASE_GITLINK, {"src/code.py": "x = 2\n"})
+    assert log.endswith("exit 0"), log
+    repo = ws / "repo"
+    assert (repo / ".claude/skills/x").is_dir() and not list((repo / ".claude/skills/x").iterdir())
+    assert index_entry(repo, ".claude/skills/x").startswith(b"160000 " + b"2" * 40)
+    assert (ws / "prompt.md").exists()
+
+
+def test_pr_changed_gitlink_is_reset_to_the_base_commit(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    ws, log = fetch(tmp_path, upstream, BASE_GITLINK, {".claude/skills/x": "gitlink " + "3" * 40})
+    assert log.endswith("exit 0"), log
+    assert index_entry(ws / "repo", ".claude/skills/x").startswith(b"160000 " + b"2" * 40)
+
+
+@pytest.mark.parametrize(
+    ("fork", "head"),
+    [
+        # The PR changes the base submodule's commit.
+        (BASE_GITLINK, {".claude/skills/x": "gitlink " + "3" * 40}),
+        # The PR adds a submodule there.
+        (FORK, {".claude/skills/y": "gitlink " + "4" * 40}),
+    ],
+)
+def test_pr_gitlink_with_the_reset_subverted_fails_closed(
+    tmp_path: pathlib.Path, upstream: Upstream, fork: dict[str, str], head: dict[str, str | None]
+) -> None:
+    """Layer b: if the reset left the PR's gitlink, it is not the base's own, and the fetch stops."""
+    _, base_sha, head_sha = upstream.make(fork, {}, head)
+    root = make_root(tmp_path / "root")
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    result = run_entry(root, ["--phase", "fetch", str(ws)], env={**upstream.env(), **shim_env(tmp_path)})
+    log = result.stdout.decode()
+    assert result.returncode == 1, log
+    assert "git shim: skipped" in log
+    assert "is a symlink or a gitlink where the reset expects" in log, log
+    assert not (ws / "prompt.md").exists()
