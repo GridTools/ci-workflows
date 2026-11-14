@@ -901,3 +901,80 @@ def test_pr_gitlink_with_the_reset_subverted_fails_closed(
     assert "git shim: skipped" in log
     assert "is a symlink or a gitlink where the reset expects" in log, log
     assert not (ws / "prompt.md").exists()
+
+
+# --- Link spellings and refusal reasons (final security review R3) ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("fork", "link", "content"),
+    [
+        ({"CLAUDE.md": "base claude\n", "AGENTS.md": "-> ./CLAUDE.md"}, "AGENTS.md", "base claude\n"),
+        (
+            {".agents/skills/s/SKILL.md": "base skill\n", ".claude/skills": "-> ../.agents/skills/"},
+            ".claude/skills/s/SKILL.md",
+            "base skill\n",
+        ),
+        (
+            {".agents/skills/s/SKILL.md": "base skill\n", ".claude/skills": "-> .././.agents/./skills"},
+            ".claude/skills/s/SKILL.md",
+            "base skill\n",
+        ),
+    ],
+)
+def test_harmless_link_spellings_pass(
+    tmp_path: pathlib.Path, upstream: Upstream, fork: dict[str, str], link: str, content: str
+) -> None:
+    """'.' parts and one trailing '/' are dropped lexically."""
+    ws, log = fetch(tmp_path, upstream, {**FORK, **fork}, {"src/code.py": "x = 2\n"})
+    assert log.endswith("exit 0"), log
+    assert (ws / "repo" / link).read_text() == content
+
+
+SKILL = {".agents/skills/s.md": "x\n"}
+
+
+@pytest.mark.parametrize(
+    ("links", "reason"),
+    [
+        ({".claude/skills": "-> /abs/.agents/skills"}, "its target is absolute"),
+        ({".claude/skills": "-> ../.agents/x/../skills"}, "its target has '..' after the start"),
+        ({".claude/skills": "-> ../../.agents/skills"}, "its target leads outside the repository"),
+        ({".claude/skills": "-> ../.agents//skills"}, "its target has an empty part ('//')"),
+        ({".claude/skills": "-> .."}, "its target is one of its own parent directories"),
+        (chain(9), "its target leads through more than 8 symlinks"),
+        (
+            {"loop1": "-> loop2", "loop2": "-> loop1", ".claude/skills": "-> ../loop1"},
+            "its target leads through a cycle of symlinks",
+        ),
+        (
+            {"shared": "-> /etc", ".claude/skills": "-> ../shared/skills"},
+            "the symlink 'shared' on the way: its target is absolute",
+        ),
+    ],
+)
+def test_each_refusal_names_its_reason(
+    tmp_path: pathlib.Path, upstream: Upstream, links: dict[str, str], reason: str
+) -> None:
+    ws, log = fetch(tmp_path, upstream, {**FORK, **SKILL, **links}, {"src/code.py": "x = 2\n"})
+    assert_stopped(ws, log)
+    assert "'.claude/skills' is a symlink or a gitlink where the reset expects" in log, log
+    assert f"and {reason}" in log, log
+
+
+def test_refusal_reason_for_a_symlink_the_base_does_not_have(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    """With the reset subverted, the PR's own symlink stays: not a symlink of the base commit."""
+    _, base_sha, head_sha = upstream.make(FORK, {}, {**EVIL, ".opencode": "-> evil"})
+    root = make_root(tmp_path / "root")
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    result = run_entry(root, ["--phase", "fetch", str(ws)], env={**upstream.env(), **shim_env(tmp_path)})
+    log = result.stdout.decode()
+    assert result.returncode == 1, log
+    assert "'.opencode' is a symlink or a gitlink" in log and "and it is not a symlink of the base commit" in log, log
+
+
+def test_refusal_reason_for_an_uncovered_target(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    ws, log = fetch(tmp_path, upstream, {**FORK, "skills/s.md": "x\n", ".claude/skills": "-> ../skills"}, {})
+    assert_stopped(ws, log)
+    assert "'.claude/skills' is a symlink in the base commit to 'skills', " + UNCOVERED in log, log
+    assert "add 'skills/' to instruction_files" in log, log

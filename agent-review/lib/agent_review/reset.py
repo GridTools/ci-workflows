@@ -359,31 +359,46 @@ def _linked_paths(git: Git, repo_dir: str) -> list[str]:
 MAX_LINK_HOPS = 8
 
 
-def _base_link_hop(git: Git, repo_dir: str, base_sha: str, path: str) -> list[str] | None:
-    """The components of the path the base symlink ``path`` points at, lexically; None unless it is safe.
+class _LinkRefused(Exception):
+    """A symlink fails the base-link exception; the message says why."""
+
+
+def _base_link_hop(git: Git, repo_dir: str, base_sha: str, path: str) -> list[str]:
+    """The components of the path the base symlink ``path`` points at, lexically; raises _LinkRefused.
 
     Safe: a symlink in the checkout with exactly its base target (so the
     PR did not make or change it), relative, climbing only through leading
-    ``..``, and staying inside the repository. The caller passes a ``path``
-    whose leading directories are real ones, so the climb is exact.
+    ``..``, and staying inside the repository. ``.`` parts and one trailing
+    ``/`` are dropped ('./CLAUDE.md', '../.agents/skills/'); an empty part
+    elsewhere ('a//b') is refused. The caller passes a ``path`` whose
+    leading directories are real ones, so the climb is exact.
     """
     full = os.path.join(repo_dir, path)
-    if not os.path.islink(full):
-        return None  # a gitlink
     entry = _parse_ls_tree(git.output("ls-tree", "-z", "--full-tree", base_sha, "--", path))
     if entry is None or entry[:2] != ("120000", "blob") or entry[3] != path:
-        return None
+        raise _LinkRefused("it is not a symlink of the base commit")
     target = os.readlink(os.fsencode(full))
-    if target != git.output("cat-file", "blob", entry[2]) or target.startswith(b"/"):
-        return None
+    if target != git.output("cat-file", "blob", entry[2]):
+        raise _LinkRefused("its target is not the base commit's")
+    if target.startswith(b"/"):
+        raise _LinkRefused("its target is absolute")
     parts = os.fsdecode(target).split("/")
+    if len(parts) > 1 and parts[-1] == "":
+        parts.pop()  # one trailing '/'
+    parts = [part for part in parts if part != "."]
+    if any(part == "" for part in parts):
+        raise _LinkRefused("its target has an empty part ('//')")
     climb = 0
     while climb < len(parts) and parts[climb] == "..":
         climb += 1
     rest = parts[climb:]
     parent = path.split("/")[:-1]
-    if not rest or any(part in ("", ".", "..") for part in rest) or climb > len(parent):
-        return None
+    if ".." in rest:
+        raise _LinkRefused("its target has '..' after the start")
+    if climb > len(parent):
+        raise _LinkRefused("its target leads outside the repository")
+    if not rest:
+        raise _LinkRefused("its target is one of its own parent directories")
     return [*parent[: len(parent) - climb], *rest]
 
 
@@ -412,26 +427,29 @@ def _is_base_gitlink(git: Git, repo_dir: str, base_sha: str, path: str) -> bool:
         return False
 
 
-def _resolve_base_link(git: Git, repo_dir: str, base_sha: str, path: str, seen: list[str]) -> str | None:
-    """The real repository path the base symlink ``path`` leads to, or None.
+def _resolve_base_link(git: Git, repo_dir: str, base_sha: str, path: str, seen: list[str]) -> str:
+    """The real repository path the base symlink ``path`` leads to; raises _LinkRefused.
 
     Every symlink on the way (the target, or a directory leading to it) must
     pass ``_base_link_hop`` too; at most MAX_LINK_HOPS symlinks, and a cycle
-    fails.
+    fails. A refusal on the way names that symlink.
     """
-    if path in seen or len(seen) >= MAX_LINK_HOPS:
-        return None
+    if path in seen:
+        raise _LinkRefused(f"its target leads through a cycle of symlinks ('{path}' again)")
+    if len(seen) >= MAX_LINK_HOPS:
+        raise _LinkRefused(f"its target leads through more than {MAX_LINK_HOPS} symlinks")
     seen.append(path)
     components = _base_link_hop(git, repo_dir, base_sha, path)
-    if components is None:
-        return None
     current: list[str] = []
     for component in components:
         candidate = "/".join([*current, component])
         if os.path.islink(os.path.join(repo_dir, candidate)):
-            resolved = _resolve_base_link(git, repo_dir, base_sha, candidate, seen)
-            if resolved is None:
-                return None
+            try:
+                resolved = _resolve_base_link(git, repo_dir, base_sha, candidate, seen)
+            except _LinkRefused as e:
+                if str(e).startswith("its target leads through"):
+                    raise
+                raise _LinkRefused(f"the symlink '{candidate}' on the way: {e}") from e
             current = resolved.split("/")
         else:
             current.append(component)
@@ -494,35 +512,38 @@ def verify_no_linked_directories(
     link_specs = [*pathspecs(patterns), *container_specs(patterns)]
     file_specs = pathspecs(patterns)
     dir_specs = directory_target_specs(patterns)
-    refused: list[tuple[str, str | None]] = []
+    # (link, target the reset does not cover, or None; reason when there is no target)
+    refused: list[tuple[str, str | None, str]] = []
     with Coverage(scratch_parent, env, ()) as coverage:
         try:
             for path in coverage.matching(linked, link_specs):
                 if not os.path.islink(os.path.join(repo_dir, path)):  # a gitlink
                     if not _is_base_gitlink(git, repo_dir, base_sha, path):
-                        refused.append((path, None))
+                        reason = "it is a gitlink that is not the base commit's own with an empty directory"
+                        refused.append((path, None, reason))
                     continue
-                target = _resolve_base_link(git, repo_dir, base_sha, path, [])
-                if target is None:
-                    refused.append((path, None))
+                try:
+                    target = _resolve_base_link(git, repo_dir, base_sha, path, [])
+                except _LinkRefused as e:
+                    refused.append((path, None, str(e)))
                     continue
                 specs = dir_specs if _is_directory(repo_dir, target) else file_specs
                 if not coverage.matching([target], specs):
-                    refused.append((path, target))
+                    refused.append((path, target, ""))
         except runner.CommandError as e:
             raise Fatal(f"Could not check the symlinks and gitlinks of the checkout: {e}.") from e
     if not refused:
         return
-    path, target = refused[0]
+    first, uncovered, reason = refused[0]
     count = f"({len(refused)} such path(s))"
-    if target is None:
+    if uncovered is None:
         raise Fatal(
-            f"'{path}' is a symlink or a gitlink where the reset expects an instruction file or directory,"
-            f" or a directory leading to an instruction file {count}."
+            f"'{first}' is a symlink or a gitlink where the reset expects an instruction file or directory,"
+            f" or a directory leading to an instruction file, and {reason} {count}."
         )
-    wanted = f"{target}/" if _is_directory(repo_dir, target) else target
+    wanted = f"{uncovered}/" if _is_directory(repo_dir, uncovered) else uncovered
     raise Fatal(
-        f"'{path}' is a symlink in the base commit to '{target}', which the reset does not cover, so the agent"
+        f"'{first}' is a symlink in the base commit to '{uncovered}', which the reset does not cover, so the agent"
         f" would read the pull request's version {count}; add '{wanted}' to instruction_files to review it."
     )
 
