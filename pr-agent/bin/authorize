@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# The 'authorize' step of PR Agent: validates the caller's static inputs,
+# decides whether this event may run PR Agent and checks the actor's
+# permission. The only gate: 'pull_request_target' ignores fork approval.
+# Any command is allowed; comments with setting arguments are refused
+# (bin/check-command).
+#
+# Usage: authorize   (configuration in the environment, see below)
+#
+# Fails closed: an invalid input or an API failure is an error
+# ('allowed=false', exit 1); a denied actor or an event that is not for us is
+# a notice ('allowed=false', exit 0).
+#
+# Environment (from the workflow; IN_* are the caller's inputs):
+#   REPO EVENT ACTION                      github context
+#   PR_NUMBER PR_AUTHOR PR_DRAFT PR_HEAD_REPO
+#                                          'pull_request*' payload
+#   ISSUE_NUMBER ISSUE_IS_PR COMMENTER BODY
+#                                          'issue_comment' payload
+#   IN_API_BASE IN_ENVIRONMENT IN_DOCS_URL IN_DRY_RUN IN_TEST_PR
+#   TRUSTED_REPO TRUSTED_SHA               job.workflow_repository/_sha
+#   CALLER_WF_SHA                          the caller's github.workflow_sha
+#   HAS_SHARED_KEY  'true' if 'secrets.inference_api_key' is non-empty in this
+#                   job, which declares no environment
+#
+# Events:
+#   pull_request_target  'opened', 'reopened', 'ready_for_review' of a
+#                        non-draft PR; writer check on the PR author
+#   issue_comment        'created' on a PR; bin/check-command; writer check on
+#                        the commenter
+#   pull_request         caller test mode, as 'pull_request_target'; the
+#                        caller's workflow file is PR content here
+#   push, schedule, workflow_dispatch, pull_request with 'test_pr'
+#                        the self-test of this repository only: forced dry
+#                        run, no writer check
+#
+# Outputs: allowed, result ('skipped', 'dry-run' or 'incomplete', which the
+# PR Agent job replaces with its outcome), dry_run, pr, api_base, docs_url,
+# trusted_repo, trusted_sha.
+
+set -euo pipefail
+
+readonly DOCS=https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md
+BIN_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+TRUSTED_ROOT=$(cd "${BIN_DIR}/.." && pwd)
+
+: "${GITHUB_OUTPUT:?}"
+for v in REPO EVENT ACTION PR_NUMBER PR_AUTHOR PR_DRAFT PR_HEAD_REPO ISSUE_NUMBER ISSUE_IS_PR \
+  COMMENTER BODY IN_API_BASE IN_ENVIRONMENT IN_DOCS_URL IN_DRY_RUN IN_TEST_PR TRUSTED_REPO \
+  TRUSTED_SHA CALLER_WF_SHA HAS_SHARED_KEY; do
+  declare -g "${v}=${!v-}"
+done
+
+see="See ${DOCS}#inputs."
+fail() {
+  echo "allowed=false" >>"${GITHUB_OUTPUT}"
+  echo "::error::$1 ${see}"
+  exit 1
+}
+skip() {
+  echo "::notice::$1"
+  printf 'allowed=false\nresult=skipped\n' >>"${GITHUB_OUTPUT}"
+  exit 0
+}
+
+# --- This workflow's own commit, from which every trusted file is read ------
+[[ "${TRUSTED_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "No job.workflow_repository ('${TRUSTED_REPO}')."
+[[ "${TRUSTED_SHA}" =~ ^[0-9a-f]{40}$ ]] || fail "No job.workflow_sha ('${TRUSTED_SHA}')."
+[[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "Invalid repository '${REPO}'."
+echo "::notice::PR Agent workflow ${TRUSTED_REPO}@${TRUSTED_SHA}; caller ${REPO}@${CALLER_WF_SHA}."
+
+# --- Static inputs ------------------------------------------------------------
+# The caller's documentation, linked from errors and the failure comment.
+# Restricted to characters that cannot break out of a Markdown link.
+docs_url=${IN_DOCS_URL}
+if [ -n "${docs_url}" ]; then
+  [[ "${docs_url}" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/#%-]*)?$ ]] && [ "${#docs_url}" -le 200 ] ||
+    fail "Invalid docs_url '${docs_url:0:200}': an https URL without spaces, quotes, brackets or parentheses."
+  see="See ${DOCS}#inputs and ${docs_url}."
+fi
+
+# The key must be an environment secret: here, in a job without an
+# environment, the caller's mapping yields a repository or organization
+# secret of that name.
+case "${HAS_SHARED_KEY}" in
+  false) ;;
+  true) fail "Secret 'inference_api_key' is readable in a job without an environment: the caller maps a repository or organization secret. Map it only from the environment's own secret, and delete the shared one." ;;
+  *) fail "Invalid HAS_SHARED_KEY '${HAS_SHARED_KEY}'." ;;
+esac
+
+case "${IN_DRY_RUN}" in true | false) ;; *) fail "Invalid dry_run '${IN_DRY_RUN}'." ;; esac
+[[ "${IN_ENVIRONMENT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || fail "Invalid environment '${IN_ENVIRONMENT}'."
+
+# Where the key is sent: an exact entry of the central allowlist.
+api_base=${IN_API_BASE}
+mapfile -t api_bases < <(grep -v -e '^#' -e '^$' "${TRUSTED_ROOT}/api-bases.txt")
+[ "${#api_bases[@]}" -gt 0 ] || fail "No allowed inference endpoint in api-bases.txt."
+[ -n "${api_base}" ] || api_base=${api_bases[0]}
+allowed_base=false
+for b in "${api_bases[@]}"; do [ "${api_base}" != "${b}" ] || allowed_base=true; done
+[ "${allowed_base}" = true ] || fail "Input api_base '${api_base}' is not an allowed inference endpoint (pr-agent/api-bases.txt)."
+
+# --- Event ----------------------------------------------------------------------
+dry_run=${IN_DRY_RUN}
+check_writer=true
+if [ -n "${IN_TEST_PR}" ]; then
+  # The self-test: this repository calling its own workflow, against a PR of
+  # another public repository. Nothing can be spent or posted.
+  [ "${TRUSTED_REPO}" = "${REPO}" ] || fail "Input test_pr is for the self-test of ${TRUSTED_REPO} only."
+  case "${EVENT}" in pull_request | push | schedule | workflow_dispatch) ;; *) fail "Input test_pr is not supported under '${EVENT}'." ;; esac
+  [[ "${IN_TEST_PR}" =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,9})$ ]] || fail "Invalid test_pr '${IN_TEST_PR}'."
+  test_repo=${BASH_REMATCH[1]}
+  pr=${BASH_REMATCH[2]}
+  if ! head=$(gh api "repos/${test_repo}/pulls/${pr}" --jq '.head.sha' 2>&1); then
+    fail "Could not resolve pull request ${test_repo}#${pr}: '${head}'."
+  fi
+  [[ "${head}" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid head sha '${head}' of ${test_repo}#${pr}."
+  echo "::notice::Self-test against ${test_repo}#${pr} at ${head}: forced dry run, no permission check."
+  dry_run=true
+  check_writer=false
+else
+  case "${EVENT}" in
+    pull_request_target | pull_request)
+      # Only these actions, whatever 'types' the caller lists.
+      case "${ACTION}" in
+        opened | reopened | ready_for_review) ;;
+        *) skip "Action '${ACTION}' of '${EVENT}' does not start PR Agent (allowed: opened, reopened, ready_for_review)." ;;
+      esac
+      [ "${PR_DRAFT}" != true ] || skip "Draft pull request; comment '/review' to request a review."
+      actor=${PR_AUTHOR}
+      pr=${PR_NUMBER}
+      if [ "${EVENT}" = pull_request ]; then
+        echo "::notice::Caller test mode (event 'pull_request'): the caller's workflow file and inputs are pull request content here. The key reaches this run only if the '${IN_ENVIRONMENT}' environment allows the pull request's ref."
+        # GitHub passes no secrets to fork PRs under 'pull_request'.
+        [ "${dry_run}" = true ] || [ "${PR_HEAD_REPO}" = "${REPO}" ] ||
+          skip "Pull request from a fork ('${PR_HEAD_REPO}'): no key under 'pull_request'; use 'dry_run'."
+      fi
+      ;;
+    issue_comment)
+      [ "${ACTION}" = created ] || skip "Action '${ACTION}' of 'issue_comment' does not start PR Agent."
+      [ "${ISSUE_IS_PR}" = true ] || skip "Comment on an issue, not a pull request."
+      if ! reason=$(BODY=${BODY} bash "${BIN_DIR}/check-command"); then
+        skip "${reason}"
+      fi
+      actor=${COMMENTER}
+      pr=${ISSUE_NUMBER}
+      ;;
+    *) fail "Unexpected event '${EVENT}': PR Agent runs under 'pull_request_target' and 'issue_comment' ('pull_request' for caller tests)." ;;
+  esac
+fi
+
+if [ "${check_writer}" = true ]; then
+  [[ "${actor}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]] || fail "Invalid actor '${actor}'."
+  # 'author_association' is not used: it hides private organization members
+  # and does not imply write access.
+  if ! level=$(gh api "repos/${REPO}/collaborators/${actor}/permission" --jq '.permission' 2>&1); then
+    fail "Could not resolve repository permission for '${actor}', denying: '${level}'."
+  fi
+  # 'permission' reports the 'maintain' role as 'write', and 'triage' as
+  # 'read'.
+  case "${level}" in
+    admin | write) echo "::notice::${actor} has '${level}' permission; running PR Agent." ;;
+    *) skip "${actor} has '${level}' permission; skipping PR Agent." ;;
+  esac
+fi
+
+[[ "${pr}" =~ ^[1-9][0-9]{0,9}$ ]] || fail "Invalid pull request number '${pr}'."
+
+result=incomplete
+[ "${dry_run}" = false ] || result=dry-run
+{
+  echo "allowed=true"
+  echo "result=${result}"
+  echo "dry_run=${dry_run}"
+  echo "pr=${pr}"
+  echo "api_base=${api_base}"
+  echo "docs_url=${docs_url}"
+  echo "trusted_repo=${TRUSTED_REPO}"
+  echo "trusted_sha=${TRUSTED_SHA}"
+} >>"${GITHUB_OUTPUT}"
