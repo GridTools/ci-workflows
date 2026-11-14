@@ -256,8 +256,8 @@ jobs:
           # Sandbox output issues no workflow command in the legacy syntax
           # either (invariant 11): the stub prints the probe on stdout and
           # through 'diag'; neither may become an annotation of the job.
-          expect "the legacy-command probe ran (stdout and diag)" \
-            test "$(grep -c 'agent-review-legacy-probe' "${log}")" -ge 2
+          expect "the legacy-command probe ran (stdout and diag, with and without NUL)" \
+            test "$(grep -a -c 'agent-review-legacy-probe' "${log}")" -ge 4
           check_run=$(job 'e2e / review-keyless' check_run_url)
           [[ "${check_run}" =~ ^https://api\.github\.com/(repos/[^/]+/[^/]+/check-runs/[0-9]+)$ ]] ||
             { echo "::error::No check run for the keyless job."; exit 1; }

@@ -35,6 +35,10 @@ ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "${ar_root}/harnesses/common.sh"
 echo "stub: ##[warning]agent-review-legacy-probe (stdout)"
 echo "##[warning]agent-review-legacy-probe (diag)" | ADAPTER_NAME=stub diag
+# The same with a NUL byte between the two '#', which a filter matching
+# only the literal '##[' would let through.
+printf 'stub: #\0#[warning]agent-review-legacy-probe (stdout, NUL)\n'
+printf '#\0#[warning]agent-review-legacy-probe (diag, NUL)\n' | ADAPTER_NAME=stub diag
 
 # Names only, never values: confirms in the log that no credential-like
 # variable other than AWF's placeholders reaches the sandbox.
