@@ -9,7 +9,7 @@ set -uo pipefail
 PC="${BIN_DIR}/publish-comment"
 ZWJ=$'\xe2\x80\x8d'
 ZWSP=$'\xe2\x80\x8b'
-RUN_URL="https://github.com/example-org/gt4py/actions/runs/1"
+RUN_URL="https://github.com/example-org/example/actions/runs/1"
 SHA=0123456789abcdef0123456789abcdef01234567
 
 sanitize() { run_entry "${PC}" sanitize; }
@@ -21,7 +21,7 @@ render() {
 
 test_neutralises_mentions() {
   local out
-  out=$(printf 'Ping @some-user and @GridTools/gt4py-core, mail a@b.org.\n' | sanitize) &&
+  out=$(printf 'Ping @some-user and @example-org/core-team, mail a@b.org.\n' | sanitize) &&
     assert "no live mention left" lacks '@[A-Za-z0-9]' "${out}" &&
     assert "mention kept readable" grep -qF "@${ZWJ}some-user" <<<"${out}"
 }

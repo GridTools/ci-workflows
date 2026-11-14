@@ -20,12 +20,15 @@ repos:
         args: [--severity=warning]
   # The agent review's Python code (agent-review/lib/, tests). Entry points in
   # bin/ have no '.py' suffix and are checked against their fixed template
-  # by the structure test instead.
+  # by the structure test instead. Scoped to agent-review/: PR Agent
+  # (pr-agent/) stays bash, and its test scripts follow their own rules.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: ef6cf06c079dd6b299dfc720b0f14400c9d168e1 # frozen: v0.17.5
     hooks:
       - id: ruff-check
+        files: ^agent-review/
       - id: ruff-format
+        files: ^agent-review/
   # The runtime code only, which has no dependency; the self-test's 'python'
   # job also checks the tests, with the hash-pinned requirements.
   - repo: https://github.com/pre-commit/mirrors-mypy

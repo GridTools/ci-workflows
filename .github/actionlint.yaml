@@ -5,3 +5,6 @@ paths:
   .github/workflows/agent-review.yml:
     ignore:
       - 'property "workflow_(repository|sha)" is not defined in object type'
+  .github/workflows/pr-agent.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined in object type'
