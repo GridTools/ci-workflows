@@ -236,6 +236,12 @@ def cmd_post(args: Sequence[str]) -> bytes:
         paginate=True,
         jq=LISTING_JQ,
     )
+    # BOT_LOGIN is a test hook (the suite's fake listing uses another bot),
+    # read in the step that holds the write token. That is safe: the
+    # 'Publish the review' step's env: in agent-review.yml is fixed and does
+    # not set it, and a called workflow does not inherit the caller's env:,
+    # so neither a caller nor a pull request can choose which comments
+    # count as ours.
     cid = find_comment(listing, os.environ.get("BOT_LOGIN") or DEFAULT_BOT_LOGIN, want)
     # Our own body, encoded as JSON (never parsing anything); compact, as 'jq -c'.
     payload = (json.dumps({"body": body}, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
