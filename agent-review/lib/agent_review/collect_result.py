@@ -16,9 +16,11 @@ every open is relative to a directory descriptor, with ``O_NOFOLLOW``:
   nothing.
 - Only ``review.md`` and ``meta.json`` are copied, each only if it is a
   regular file with a single link, at most ``MAX_BYTES``. The type is
-  checked with ``lstat`` first, so a FIFO or a device is never opened, and
-  again with ``fstat`` on the open descriptor (``files.read_bytes``), which
-  also caps the bytes read: a file that grows while it is read is refused.
+  checked with ``lstat`` first, so a FIFO or a device found there is not
+  opened. Whatever is opened (also something swapped in after that check)
+  is opened non-blocking and checked again with ``fstat`` on the descriptor
+  (``files.read_bytes``), which also caps the bytes read: a file that grows
+  while it is read is refused.
 - The content is copied as bytes; the ``publish`` job validates it again
   and never trusts this copy.
 - ``<dest-dir>`` (under ``$RUNNER_TEMP``, outside the sandbox's reach) is
