@@ -132,7 +132,7 @@ def test_rules() -> None:
 def values(**changes: object) -> prompt.PromptValues:
     base: dict[str, object] = {
         "project": "GT4Py",
-        "repo": "GridTools/gt4py",
+        "repo": "example-org/example",
         "pr_number": "2983",
         "head_sha": "a" * 40,
         "base_sha": "b" * 40,
@@ -170,14 +170,24 @@ def test_render_strips_the_nonce_from_the_pr_text() -> None:
     assert out == f"<{nonce}>|xy</{nonce}>\n".encode()
 
 
-def test_render_is_sequential_like_bash() -> None:
-    # The title is substituted before the body, so a '{{PR_BODY}}' in the
-    # title becomes the body (still between the delimiters), as in bash;
-    # placeholders in the body stay.
+def test_render_is_one_pass() -> None:
+    # Placeholders inside values stay as they are, wherever they come from.
     out = prompt.render(b"{{PR_TITLE}}\n{{PR_BODY}}", values(title=b"T {{PR_BODY}}", body=b"B {{PR_TITLE}}"), "n" * 24)
-    assert out == b"T B {{PR_TITLE}}\nB {{PR_TITLE}}\n"
-    # Trusted text first: a placeholder in the rules is expanded.
-    assert prompt.render(b"{{RULES}}", values(rules=b"{{REPO}}"), "n" * 24) == b"GridTools/gt4py\n"
+    assert out == b"T {{PR_BODY}}\nB {{PR_TITLE}}\n"
+    assert prompt.render(b"{{RULES}}", values(rules=b"{{REPO}}"), "n" * 24) == b"{{REPO}}\n"
+    # Unknown placeholders in the template stay too.
+    assert prompt.render(b"{{UNKNOWN}} {{REPO}}", values(), "n" * 24) == b"{{UNKNOWN}} example-org/example\n"
+
+
+def test_title_cannot_multiply_the_body() -> None:
+    """With sequential substitution, each '{{PR_BODY}}' in the title expanded the body:
+    46 of them in a 512-byte title gave a prompt of about 774 KB."""
+    template = (AR_DIR / "prompt.md.tmpl").read_bytes()
+    title = prompt.title_bytes("{{PR_BODY}}" * 46)
+    body = prompt.body_bytes("b" * 20000)
+    out = prompt.render(template, values(title=title, body=body), prompt.new_nonce())
+    assert out.count(b"{{PR_BODY}}") == 46
+    assert len(out) < len(template) + 2 * prompt.PR_TITLE_MAX_BYTES + prompt.PR_BODY_MAX_BYTES + 4096
 
 
 def test_render_template_newlines_and_nul() -> None:
