@@ -26,7 +26,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Head of the fixture (GridTools/gt4py PR 2983, set in the 'e2e' inputs).
+  # Head of the fixture (GridTools/gt4py PR 2983, set in the 'e2e' and
+  # 'pr-agent-e2e' inputs).
   FIXTURE_HEAD_SHA: 46e9c4f3cecc6571b36b219994f8b126602513ff
 
 jobs:
@@ -207,7 +208,7 @@ jobs:
             sleep $((i * 5))
           done
           log="${RUNNER_TEMP}/authorize.log"
-          expect "the fixture was resolved" grep -qF 'Self-test against GridTools/gt4py#2983 at 46e9c4f3cecc6571b36b219994f8b126602513ff' "${log}"
+          expect "the fixture was resolved" grep -qF "Self-test against GridTools/gt4py#2983 at ${FIXTURE_HEAD_SHA}" "${log}"
           expect "the chain was derived" grep -qF "Model 'openai/zai-org/GLM-5.3-Flash', fallbacks [\"openai/Qwen/Qwen3.8-Flash-Next-FP8\",\"openai/Qwen/Qwen3.8-27B-FP8\"]; context window 262144, output reserve 100000, 600 s per model, 32 min for the chain." "${log}"
 
           n=$(gh api "repos/${REPO}/deployments?sha=${COMMIT}" --jq length)

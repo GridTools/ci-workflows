@@ -78,21 +78,24 @@ permissions: {}
 jobs:
   authorize:
     # Structural filters only, to avoid runs for unrelated events; the
-    # decision is made by 'pr-agent/bin/authorize'.
+    # decision is made by 'pr-agent/bin/authorize'. The self-test runs on
+    # bots' PRs too.
     if: >-
-      github.event.sender.type != 'Bot'
-      && (
-        (
-          (github.event_name == 'pull_request_target' || github.event_name == 'pull_request')
-          && github.event.pull_request.draft == false
-          && github.event.pull_request.user.type != 'Bot'
+      inputs.test_pr != ''
+      || (
+        github.event.sender.type != 'Bot'
+        && (
+          (
+            (github.event_name == 'pull_request_target' || github.event_name == 'pull_request')
+            && github.event.pull_request.draft == false
+            && github.event.pull_request.user.type != 'Bot'
+          )
+          || (
+            github.event_name == 'issue_comment'
+            && github.event.issue.pull_request != null
+            && startsWith(github.event.comment.body, '/')
+          )
         )
-        || (
-          github.event_name == 'issue_comment'
-          && github.event.issue.pull_request != null
-          && startsWith(github.event.comment.body, '/')
-        )
-        || inputs.test_pr != ''
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 5

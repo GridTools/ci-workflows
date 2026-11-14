@@ -137,7 +137,7 @@ else
     issue_comment)
       [ "${ACTION}" = created ] || skip "Action '${ACTION}' of 'issue_comment' does not start PR Agent."
       [ "${ISSUE_IS_PR}" = true ] || skip "Comment on an issue, not a pull request."
-      if ! reason=$(BODY=${BODY} "${BIN_DIR}/check-command"); then
+      if ! reason=$(BODY=${BODY} bash "${BIN_DIR}/check-command"); then
         skip "${reason}"
       fi
       actor=${COMMENTER}

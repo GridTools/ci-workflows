@@ -237,7 +237,7 @@ Any caller may call the workflow under `pull_request` with the **`stub`** harnes
 
 ## Releases
 
-Semver tags `vX.Y.Z` on reviewed commits of `main`, with release notes that flag **breaking** changes: a new permission in any job, a new required input, a raised ceiling, a new endpoint in `api-bases.txt`, a new harness pin or AWF version. No moving major tag (`v1`): it would let changes reach callers unreviewed. The first release is **`v0.1.0`**.
+Releases cover every workflow in this repository; PR Agent's additional checks are in its [release checklist](pr-agent.md#release-checklist). Semver tags `vX.Y.Z` on reviewed commits of `main`, with release notes that flag **breaking** changes: a new permission in any job, a new required input, a raised ceiling, a new endpoint in `api-bases.txt`, a new harness pin or AWF version. No moving major tag (`v1`): it would let changes reach callers unreviewed. The first release is **`v0.1.0`**.
 
 ### Release checklist
 
