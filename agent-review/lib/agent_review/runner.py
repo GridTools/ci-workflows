@@ -28,6 +28,7 @@ import enum
 import os
 import selectors
 import subprocess
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -129,14 +130,14 @@ def _communicate(
     out = bytearray()
     err = bytearray()
     pending = memoryview(stdin or b"")
-    assert proc.stdout is not None  # noqa: S101 (always a pipe here)
     stdin_fd = proc.stdin.fileno() if proc.stdin is not None else -1
-    stdout_fd = proc.stdout.fileno()
+    stdout_fd = proc.stdout.fileno() if proc.stdout is not None else -1
     with selectors.DefaultSelector() as selector:
         if proc.stdin is not None:
             os.set_blocking(stdin_fd, False)
             selector.register(stdin_fd, selectors.EVENT_WRITE)
-        selector.register(stdout_fd, selectors.EVENT_READ)
+        if proc.stdout is not None:
+            selector.register(stdout_fd, selectors.EVENT_READ)
         if proc.stderr is not None:
             selector.register(proc.stderr.fileno(), selectors.EVENT_READ)
         while selector.get_map():
@@ -178,6 +179,7 @@ def run(
     check: bool = True,
     capture_stderr: bool = True,
     max_stdout: int = MAX_STDOUT_BYTES,
+    stdout_fd: int | None = None,
 ) -> Result:
     """Runs ``argv`` (never through a shell) and returns its output as bytes.
 
@@ -186,18 +188,27 @@ def run(
     false, stderr goes to this process's stderr; otherwise its last
     STDERR_EXCERPT_BYTES are kept. More than ``max_stdout`` bytes of stdout,
     or the ``timeout``, kills the command and raises CommandError. With
-    ``check``, a non-zero exit raises CommandError.
+    ``stdout_fd``, stdout goes to that open descriptor instead (a file the
+    caller created, or 1 to pass it through), uncapped, and
+    ``Result.stdout`` is empty. With ``check``, a non-zero exit raises
+    CommandError. This process's own buffered output is flushed first, so
+    that it stays in order with what the command writes to an inherited
+    stdout or stderr.
     """
     args = _check_argv(argv)
     full_env = environment(zone, env)
     program = args[0]
     args[0] = resolve(zone, program, full_env)
     deadline = None if timeout is None else time.monotonic() + timeout
+    if stdout_fd is not None and stdout_fd < 0:
+        raise ValueError("stdout_fd must be an open descriptor")
+    sys.stdout.flush()
+    sys.stderr.flush()
     try:
         proc = subprocess.Popen(  # noqa: S603 (argument list, resolved program)
             args,
             stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.PIPE if stdout_fd is None else stdout_fd,
             stderr=subprocess.PIPE if capture_stderr else None,
             env=full_env,
             cwd=cwd,
