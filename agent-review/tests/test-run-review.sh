@@ -102,12 +102,15 @@ setup_followed() { # extra-pattern
 }
 
 test_post_condition_catches_a_pattern_that_misses_the_file() {
-  # Bash matching says 'gt4py/*.md' covers src/gt4py/next/AGENTS.md ('*'
-  # crosses '/'), git's ':(glob)' does not, so the reset keeps the PR's
-  # file: the post-condition must stop the run before the prompt exists.
+  # 'gt4py/*.md' does not cover src/gt4py/next/AGENTS.md: in git's
+  # ':(glob)' pathspecs '*' does not cross '/'. The coverage check asks
+  # git, like the reset, so the run fails closed before the fetch. (The
+  # bash version's check said "covered" and the post-condition caught the
+  # miss; tests/python/test_run_review.py runs the post-condition with the
+  # reset subverted.)
   setup_followed 'gt4py/*.md'
   ! run_entry root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 &&
-    assert "names the file" grep -q "Followed file 'src/gt4py/next/AGENTS.md' is not in the base commit but is in the checkout" log &&
+    assert "names the file" grep -q "names 'src/gt4py/next/AGENTS.md', which no reset pattern covers" log &&
     assert "no prompt" test ! -e ws/prompt.md
 }
 

@@ -432,6 +432,7 @@ STDLIB_ALLOWED = frozenset(
         "re",
         "secrets",
         "selectors",
+        "shutil",
         "stat",
         "string",
         "subprocess",

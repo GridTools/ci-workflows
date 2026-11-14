@@ -549,7 +549,7 @@ jobs:
             --proxy-logs-dir "${RUNNER_TEMP}/awf-fetch-logs" \
             --image-tag "${IMAGE_TAG}" \
             --container-workdir "${WS}" \
-            -- /opt/agent-review/bin/run-review --phase fetch "${WS}" 2>&1 \
+            -- /usr/bin/python3 -I -S -B /opt/agent-review/bin/run-review --phase fetch "${WS}" 2>&1 \
             | /usr/bin/sed -u -e 's/\r//g' -e 's/##\[/#\xe2\x80\x8b#[/g' -e 's/^/awf| /'
           # The default shell has no pipefail: report awf's status, not sed's.
           exit "${PIPESTATUS[0]}"
@@ -588,7 +588,7 @@ jobs:
             --proxy-logs-dir "${RUNNER_TEMP}/awf-logs" \
             --image-tag "${IMAGE_TAG}" \
             --container-workdir "${WS}" \
-            -- /opt/agent-review/bin/run-review --phase review "${WS}" 2>&1 \
+            -- /usr/bin/python3 -I -S -B /opt/agent-review/bin/run-review --phase review "${WS}" 2>&1 \
             | /usr/bin/sed -u -e 's/\r//g' -e 's/##\[/#\xe2\x80\x8b#[/g' -e 's/^/awf| /'
           rc=${PIPESTATUS[0]}
           # The sandbox could write only to the workspace; still, treat the

@@ -159,3 +159,54 @@ def test_stderr_keeps_the_tail() -> None:
     result = runner.run(Zone.TAINTED_HOST, ["/bin/sh", "-c", script])
     assert len(result.stderr) == runner.STDERR_EXCERPT_BYTES
     assert result.stderr.endswith(b"xend")
+
+
+def test_stdout_to_a_descriptor_is_not_capped(tmp_path: pathlib.Path) -> None:
+    target = tmp_path / "out"
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        result = runner.run(
+            Zone.SANDBOX, ["/usr/bin/head", "-c", "3000", "/dev/zero"], stdout_fd=fd, max_stdout=1000, timeout=30
+        )
+    finally:
+        os.close(fd)
+    assert result.stdout == b""
+    assert target.read_bytes() == b"\0" * 3000
+
+
+def test_stdout_to_a_descriptor_keeps_stderr_and_timeout(tmp_path: pathlib.Path) -> None:
+    fd = os.open(tmp_path / "out", os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        result = runner.run(Zone.SANDBOX, ["/bin/sh", "-c", "echo out; echo err >&2"], stdout_fd=fd)
+        assert result.stderr == b"err\n"
+        with pytest.raises(runner.CommandError, match="timed out"):
+            runner.run(Zone.SANDBOX, ["/usr/bin/sleep", "5"], stdout_fd=fd, timeout=0.2)
+        # Neither stdout nor stderr piped: only the exit status is waited for.
+        failed = runner.run(Zone.SANDBOX, ["/bin/sh", "-c", "exit 3"], stdout_fd=fd, capture_stderr=False, check=False)
+        assert failed.returncode == 3
+    finally:
+        os.close(fd)
+    assert (tmp_path / "out").read_bytes() == b"out\n"
+
+
+def test_stdout_fd_must_be_valid() -> None:
+    with pytest.raises(ValueError, match="descriptor"):
+        runner.run(Zone.SANDBOX, ["/usr/bin/true"], stdout_fd=-1)
+
+
+def test_own_output_is_flushed_before_the_command(tmp_path: pathlib.Path) -> None:
+    """Python's buffered stdout is written before a command's inherited stdout."""
+    import subprocess
+    import sys
+
+    lib = pathlib.Path(runner.__file__).resolve().parents[1]
+    script = (
+        "import sys; sys.path.insert(0, sys.argv[1]); from agent_review import runner\n"
+        "sys.stdout.write('before\\n')\n"
+        "runner.run(runner.Zone.SANDBOX, ['/bin/echo', 'child'], stdout_fd=1)\n"
+        "sys.stdout.write('after\\n')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", script, str(lib)], capture_output=True, timeout=60, check=True
+    )
+    assert result.stdout == b"before\nchild\nafter\n"
