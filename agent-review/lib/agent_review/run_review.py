@@ -247,6 +247,14 @@ class Run:
                 git, self.repo_dir, p.base_sha, self.config.rule_files, self.config.addendum_named
             )
         )
+        reset.verify_no_linked_directories(
+            git,
+            self.repo_dir,
+            base_sha=p.base_sha,
+            patterns=self.config.reset_patterns,
+            scratch_parent=self.ws,
+            env=self.env,
+        )
 
         # --- Render the prompt ---
         title, body = prompt.read_pr(os.path.join(self.in_dir, "pr.json"))

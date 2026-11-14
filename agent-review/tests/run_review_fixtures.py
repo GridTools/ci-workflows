@@ -44,11 +44,15 @@ def git(repo: pathlib.Path, *args: str, stdin: bytes | None = None) -> bytes:
 
 
 def write_tree(repo: pathlib.Path, tree: Tree) -> None:
-    """Applies ``tree`` to the work tree: text or bytes, '-> target' for a symlink, None to delete."""
+    """Applies ``tree`` to the work tree: text or bytes, '-> target' for a symlink,
+    'gitlink <sha>' for a submodule entry (index only), None to delete."""
     for rel, content in tree.items():
         path = repo / rel
         if content is None:
             git(repo, "rm", "-r", "-q", "--", rel)
+            continue
+        if isinstance(content, str) and content.startswith("gitlink "):
+            git(repo, "update-index", "--add", "--cacheinfo", f"160000,{content.split()[1]},{rel}")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink() or path.is_file():

@@ -397,3 +397,14 @@ def test_post_condition_unusual_path(pr: PR) -> None:
         pr.verify([name])
     pr.reset([name])
     pr.verify([name])
+
+
+def test_container_specs() -> None:
+    assert reset.container_specs(
+        ["AGENTS.md", ".opencode/", ".github/copilot-instructions.md", "", "a/b/c.md", "a/b/"]
+    ) == [
+        ":(glob,icase)**/.opencode",
+        ":(glob,icase)**/.github",
+        ":(glob,icase)**/a",
+        ":(glob,icase)**/a/b",
+    ]

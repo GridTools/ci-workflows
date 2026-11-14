@@ -416,3 +416,204 @@ def test_pr_with_its_own_context_directory(tmp_path: pathlib.Path, upstream: Ups
     assert (context / "diff.patch").read_bytes().startswith(b"diff --git a/.agent-review-context")
     assert (context / "changed-files.txt").read_text().startswith("A\t.agent-review-context")
     assert "/.agent-review-context/" in (ws / "repo" / ".git" / "info" / "exclude").read_text()
+
+
+# --- Symlinks and gitlinks where a pattern expects a directory (invariant 6) ---------------
+
+EVIL = {
+    "evil/agent/x.md": "PR agent\n",
+    "evil/plugin/p.ts": "PR plugin\n",
+    "evil/copilot-instructions.md": "PR copilot\n",
+}
+
+
+def real_tree(path: pathlib.Path) -> dict[str, str]:
+    """The regular files below ``path``, found with lstat; fails on any symlink."""
+    assert not path.is_symlink()
+    files = {}
+    for directory, dirs, names in os.walk(path, followlinks=False):
+        for name in (*dirs, *names):
+            entry = pathlib.Path(directory, name)
+            assert not entry.is_symlink(), entry
+            if name in names:
+                files[str(entry.relative_to(path))] = entry.read_text()
+    return files
+
+
+def fetch(
+    tmp_path: pathlib.Path, upstream: Upstream, fork: dict[str, str], head: dict[str, str | None], **root_args: object
+) -> tuple[pathlib.Path, str]:
+    _, base_sha, head_sha = upstream.make(fork, {}, head)
+    root = make_root(tmp_path / "root", **root_args)  # type: ignore[arg-type]
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    result = run_entry(root, ["--phase", "fetch", str(ws)], env=upstream.env())
+    return ws, result.stdout.decode() + f"\nexit {result.returncode}"
+
+
+@pytest.mark.parametrize(
+    ("link", "target"),
+    [
+        (".opencode", "evil"),  # no .opencode in base
+        (".OpenCode", "evil"),  # case variant
+        ("sub/.opencode", "../evil"),  # nested
+        (".github", "evil"),  # a directory leading to .github/copilot-instructions.md
+        (".claude/agents", "../evil"),  # below a directory pattern
+    ],
+)
+def test_symlinked_instruction_directory_is_removed(
+    tmp_path: pathlib.Path, upstream: Upstream, link: str, target: str
+) -> None:
+    ws, log = fetch(tmp_path, upstream, FORK, {**EVIL, link: f"-> {target}"})
+    assert log.endswith("exit 0"), log
+    repo = ws / "repo"
+    assert not os.path.lexists(repo / link)
+    for name in ("agent/x.md", "plugin/p.ts", "copilot-instructions.md"):
+        assert not os.path.lexists(repo / link / name)
+    # The PR's symlink is kept as data (its target).
+    kept = repo / ".agent-review-context" / "pr-instruction-files" / f"{link}.txt"
+    assert kept.read_text() == target
+    assert (ws / "prompt.md").exists()
+
+
+def test_gitlink_at_an_instruction_directory_is_removed(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    ws, log = fetch(tmp_path, upstream, FORK, {".opencode": "gitlink " + "1" * 40})
+    assert log.endswith("exit 0"), log
+    assert not os.path.lexists(ws / "repo" / ".opencode")
+    assert b".opencode" not in subprocess_ls_files(ws / "repo")
+
+
+def subprocess_ls_files(repo: pathlib.Path) -> bytes:
+    from run_review_fixtures import git
+
+    return git(repo, "ls-files", "-s")
+
+
+BASE_DIRS = {
+    **FORK,
+    ".opencode/agent/a.md": "base agent\n",
+    "sub/.agents/skills/s.md": "base skill\n",
+}
+
+
+def test_instruction_directory_in_base_positive_control(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    ws, log = fetch(tmp_path, upstream, BASE_DIRS, {".opencode/agent/a.md": "PR agent\n", ".opencode/new.md": "PR\n"})
+    assert log.endswith("exit 0"), log
+    assert real_tree(ws / "repo" / ".opencode") == {"agent/a.md": "base agent\n"}
+
+
+@pytest.mark.parametrize(
+    ("directory", "target", "base_files"),
+    [
+        (".opencode", "evil", {"agent/a.md": "base agent\n"}),
+        ("sub/.agents", "../evil", {"skills/s.md": "base skill\n"}),
+    ],
+)
+def test_pr_replacing_a_base_directory_by_a_symlink(
+    tmp_path: pathlib.Path, upstream: Upstream, directory: str, target: str, base_files: dict[str, str]
+) -> None:
+    deleted: dict[str, str | None] = {f"{directory}/{name}": None for name in base_files}
+    ws, log = fetch(
+        tmp_path,
+        upstream,
+        BASE_DIRS,
+        {**deleted, **EVIL, directory: f"-> {target}"},
+        rules="AGENTS.md\n",
+    )
+    assert log.endswith("exit 0"), log
+    # A real directory holding exactly the base files: no PR file is reachable.
+    assert real_tree(ws / "repo" / directory) == base_files
+    assert "1 rule file(s) and 0 file(s) named by the addendum are their base versions." in log
+    assert (ws / "prompt.md").exists()
+
+
+def test_linked_directory_post_condition_with_the_reset_subverted(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    """The second layer: the reset's writes skipped, the symlink stays, the fetch stops."""
+    _, base_sha, head_sha = upstream.make(FORK, {}, {**EVIL, ".opencode": "-> evil"})
+    root = make_root(tmp_path / "root")
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    result = run_entry(root, ["--phase", "fetch", str(ws)], env={**upstream.env(), **shim_env(tmp_path)})
+    log = result.stdout.decode()
+    assert result.returncode == 1, log
+    assert "git shim: skipped" in log
+    assert "run-review: '.opencode' is a symlink or a gitlink where the reset expects an instruction directory" in log
+    assert not (ws / "prompt.md").exists()
+
+
+@pytest.mark.parametrize(
+    "fork",
+    [
+        {**FORK, ".agents-shared/x.md": "x\n", ".claude": "-> .agents-shared"},
+        {**FORK, "skills/s.md": "x\n", ".claude/settings.json": "{}\n", ".claude/skills": "-> ../skills"},
+        {**FORK, ".agents/skills/s.md": "x\n", ".claude/skills": "-> ../.agents/x/../skills"},
+        {**FORK, ".agents/skills/s.md": "x\n", ".claude/skills": "-> /abs/.agents/skills"},
+        {**FORK, ".agents/skills/s.md": "x\n", ".claude/skills": "-> ../../.agents/skills"},
+    ],
+)
+def test_linked_directory_from_the_base_fails_closed(
+    tmp_path: pathlib.Path, upstream: Upstream, fork: dict[str, str]
+) -> None:
+    """A base symlink there could point at files the PR changes: the run stops too."""
+    ws, log = fetch(tmp_path, upstream, fork, {"src/code.py": "x = 2\n"})
+    assert log.endswith("exit 1"), log
+    assert "is a symlink or a gitlink where the reset expects" in log
+    assert not (ws / "prompt.md").exists()
+
+
+@pytest.mark.parametrize("change", [{}, {".agents/skills/s.md": "PR skill\n", ".claude/skills": "-> ../src"}])
+def test_base_symlink_into_a_reset_directory_passes(
+    tmp_path: pathlib.Path, upstream: Upstream, change: dict[str, str]
+) -> None:
+    """A base linking '.claude/skills -> ../.agents/skills' passes: the target is reset too."""
+    fork = {**FORK, ".agents/skills/s.md": "base skill\n", ".claude/skills": "-> ../.agents/skills"}
+    ws, log = fetch(tmp_path, upstream, fork, {"src/code.py": "x = 2\n", **change})
+    assert log.endswith("exit 0"), log
+    repo = ws / "repo"
+    assert os.readlink(repo / ".claude" / "skills") == "../.agents/skills"
+    assert (repo / ".claude" / "skills" / "s.md").read_text() == "base skill\n"
+
+
+def chain(hops: int) -> dict[str, str]:
+    """'.claude/skills' through ``hops`` - 1 base symlinks at the root to '.agents/skills'."""
+    links = {f"hop{i}": f"-> hop{i + 1}" for i in range(1, hops - 1)}
+    links[f"hop{hops - 1}"] = "-> .agents"
+    return {**links, ".claude/skills": "-> ../hop1/skills" if hops > 1 else "-> ../.agents/skills"}
+
+
+@pytest.mark.parametrize(
+    ("links", "ok"),
+    [
+        # Two hops: '.claude/skills' -> 'shared/skills', where 'shared' -> '.agents'.
+        ({"shared": "-> .agents", ".claude/skills": "-> ../shared/skills"}, True),
+        # The last component a symlink too: '.agents/current' -> 'skills'.
+        ({".agents/current": "-> skills", ".claude/skills": "-> ../.agents/current"}, True),
+        (chain(8), True),  # eight symlinks in all
+        (chain(9), False),  # nine: beyond the bound
+        ({"loop1": "-> loop2", "loop2": "-> loop1", ".claude/skills": "-> ../loop1"}, False),  # a cycle
+        ({"notes.md": "notes\n", ".claude/CLAUDE.md": "-> ../notes.md"}, False),  # a file no pattern resets
+        ({"shared": "-> /etc", ".claude/skills": "-> ../shared/skills"}, False),  # a hop leaving the repository
+    ],
+)
+def test_base_symlink_chains(tmp_path: pathlib.Path, upstream: Upstream, links: dict[str, str], ok: bool) -> None:
+    fork = {**FORK, ".agents/skills/s.md": "base skill\n", **links}
+    ws, log = fetch(tmp_path, upstream, fork, {"src/code.py": "x = 2\n"})
+    if ok:
+        assert log.endswith("exit 0"), log
+        assert (ws / "repo" / ".claude" / "skills" / "s.md").read_text() == "base skill\n"
+    else:
+        assert log.endswith("exit 1"), log
+        assert "is a symlink or a gitlink where the reset expects" in log
+        assert not (ws / "prompt.md").exists()
+
+
+def test_pr_changing_an_intermediate_hop_fails_closed(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    """'shared' is not reset, but the PR cannot redirect it: every hop must be the base's own."""
+    fork = {
+        **FORK,
+        ".agents/skills/s.md": "base skill\n",
+        "shared": "-> .agents",
+        ".claude/skills": "-> ../shared/skills",
+    }
+    ws, log = fetch(tmp_path, upstream, fork, {"evil/skills/s.md": "PR skill\n", "shared": "-> evil"})
+    assert log.endswith("exit 1"), log
+    assert "'.claude/skills' is a symlink or a gitlink where the reset expects" in log
+    assert not (ws / "prompt.md").exists()

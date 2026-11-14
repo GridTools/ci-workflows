@@ -141,7 +141,7 @@ def load_config(root: str) -> Config:
 
 
 class Coverage:
-    """Whether some reset pattern matches a path, decided by git (see the module docstring)."""
+    """Which paths some pathspec matches, decided by git on a scratch index (see the module docstring)."""
 
     def __init__(self, parent_dir: str, env: Mapping[str, str], patterns: Sequence[str]) -> None:
         self.specs = pathspecs(patterns)
@@ -158,16 +158,32 @@ class Coverage:
     def __exit__(self, *exc: object) -> None:
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def covers(self, path: str) -> bool:
-        if not self.specs:
-            return False
+    def matching(self, paths: Sequence[str], specs: Sequence[str]) -> list[str]:
+        """The ``paths`` that some pathspec in ``specs`` matches.
+
+        The paths must not conflict as file and directory. A path git
+        refuses to index ('Ignoring path') would silently drop out, so the
+        index is checked to hold every path: otherwise CommandError.
+        """
+        if not specs or not paths:
+            return []
         if os.path.lexists(self.index):
             os.unlink(self.index)
         index = {"GIT_INDEX_FILE": self.index}
-        entry = f"100644 {EMPTY_BLOB}\t{path}\0".encode()
-        self.git.run("update-index", "-z", "--add", "--index-info", env=index, stdin=entry)
-        listed = self.git.output("ls-files", "-z", "--", *self.specs, env=index)
-        return path.encode() in listed.split(b"\0")
+        entries = b"".join(b"100644 " + EMPTY_BLOB.encode() + b"\t" + os.fsencode(p) + b"\0" for p in paths)
+        self.git.run("update-index", "-z", "--add", "--index-info", env=index, stdin=entries)
+        indexed = set(self.git.output("ls-files", "-z", env=index).split(b"\0")) - {b""}
+        if indexed != {os.fsencode(p) for p in paths}:
+            raise runner.CommandError("git", "the scratch index does not hold every path")
+        listed = set(self.git.output("ls-files", "-z", "--", *specs, env=index).split(b"\0"))
+        return [p for p in paths if os.fsencode(p) in listed]
+
+    def covers(self, path: str) -> bool:
+        """Whether some reset pattern matches ``path`` (False for a path git refuses)."""
+        try:
+            return bool(self.matching([path], self.specs))
+        except runner.CommandError:
+            return False
 
 
 def check_coverage(config: Config, scratch_parent: str, env: Mapping[str, str]) -> None:
@@ -183,11 +199,7 @@ def check_coverage(config: Config, scratch_parent: str, env: Mapping[str, str]) 
             # A path from the repository root, which the post-condition can check.
             if not is_plain_path(named):
                 raise Fatal(f"The prompt addendum names '{named}', which is not a plain repository path.")
-            try:
-                covered = coverage.covers(named)
-            except runner.CommandError as e:
-                raise Fatal(f"Could not check whether a reset pattern covers '{named}': {e}.") from e
-            if not covered:
+            if not coverage.covers(named):
                 raise Fatal(
                     f"The prompt addendum names '{named}', which no reset pattern covers; add it to rule_files."
                 )
@@ -206,39 +218,90 @@ def _write_from_git(git: Git, dest: str, *args: str) -> None:
         os.close(fd)
 
 
+LINK_MODES = ("120000", "160000")  # symlink, gitlink (submodule)
+
+
+def container_specs(patterns: Iterable[str]) -> list[str]:
+    """Pathspecs of the directories the patterns go through, at any depth, case-insensitively.
+
+    A directory pattern ``D/`` names ``D`` itself; a pattern with ``/``
+    names each leading part (``a/b/c.md``: ``a`` and ``a/b``). The reset's
+    ``:(glob)`` pathspecs match only the entries below such a directory,
+    never the entry itself, so a PR that put a symlink (or a gitlink) there
+    kept its own files reachable through it.
+    """
+    parts: list[str] = []
+    for pattern in patterns:
+        if not pattern:
+            continue
+        segments = pattern.rstrip("/").split("/")
+        leading = ["/".join(segments[:i]) for i in range(1, len(segments))]
+        if pattern.endswith("/"):
+            leading.append("/".join(segments))
+        parts.extend(part for part in leading if part and part not in parts)
+    return [f":(glob,icase)**/{part}" for part in parts]
+
+
+def _entries(listing: bytes) -> list[tuple[str, str]]:
+    """(mode, path) of each 'ls-files -s -z' record."""
+    entries = []
+    for record in listing.split(b"\0"):
+        if record:
+            meta, _, path = record.partition(b"\t")
+            entries.append((meta.split(b" ", 1)[0].decode("ascii", errors="replace"), os.fsdecode(path)))
+    return entries
+
+
+def _reset_entries(
+    git: Git, specs: Sequence[str], containers: Sequence[str], env: Mapping[str, str] | None = None
+) -> list[tuple[str, str]]:
+    """The entries to reset: those the patterns match, and symlinks and gitlinks where a directory of one is."""
+    entries = _entries(git.output("ls-files", "-s", "-z", "--", *specs, env=env))
+    if containers:
+        links = _entries(git.output("ls-files", "-s", "-z", "--", *containers, env=env))
+        entries += [entry for entry in links if entry[0] in LINK_MODES and entry not in entries]
+    return entries
+
+
 def reset_instruction_files(
     git: Git, ws: str, *, head_sha: str, base_sha: str, patterns: Sequence[str], context_dir: str
 ) -> None:
     """Resets every file matching a pattern to its base version; keeps the PR's changed versions as data.
 
-    Runs after the checkout of the head, so the index holds the head tree
-    (without the context directory); the base tree goes into a scratch
+    Also resets each symlink or gitlink where a pattern expects a directory
+    (``container_specs``): it becomes the base entry, or is removed if the
+    base has none; the files below are then those of the base, never the
+    PR's. Runs after the checkout of the head, so the index holds the head
+    tree (without the context directory); the base tree goes into a scratch
     index. ``ls-files``, not ``ls-tree``, which rejects the ``:(glob)``
     magic.
     """
     specs = pathspecs(patterns)
     if not specs:
         raise Fatal("No reset patterns.")
-    pr_paths = _paths(git.output("ls-files", "-z", "--", *specs))
+    containers = container_specs(patterns)
+    pr_entries = _reset_entries(git, specs, containers)
     base_index = os.path.join(ws, "base.index")
     index = {"GIT_INDEX_FILE": base_index}
     try:
         git.run("read-tree", base_sha, env=index)
-        base_paths = _paths(git.output("ls-files", "-z", "--", *specs, env=index))
+        base_paths = [path for _, path in _reset_entries(git, specs, containers, env=index)]
     finally:
         if os.path.lexists(base_index):
             os.unlink(base_index)
 
-    for path in pr_paths:
+    pr_paths = [path for _, path in pr_entries]
+    for mode, path in pr_entries:
         # Git refuses such paths in trees, but they become filesystem paths here.
         if not is_tree_path(path):
             raise Fatal(f"Unexpected path in PR tree: '{path}'.")
-        # Only what the PR adds or changes is kept, so the review can comment on it.
+        # Only what the PR adds or changes is kept, so the review can comment
+        # on it; a gitlink has no content here (submodules are not fetched).
         head_id = git.line("rev-parse", f"{head_sha}:{path}")
         if head_id is None:
             raise Fatal(f"Cannot resolve '{path}' in the head commit.")
         base_id = git.line("rev-parse", "-q", "--verify", f"{base_sha}:{path}") or ""
-        if head_id == base_id:
+        if head_id == base_id or mode == "160000":
             continue
         dest = os.path.join(context_dir, "pr-instruction-files", f"{path}.txt")
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -248,6 +311,127 @@ def reset_instruction_files(
         git.run("--literal-pathspecs", "rm", "-r", "-q", "-f", "--ignore-unmatch", "--", *pr_paths)
     if base_paths:
         git.run("--literal-pathspecs", "checkout", "-q", base_sha, "--", *base_paths)
+
+
+def _linked_paths(git: Git, repo_dir: str) -> list[str]:
+    """Every symlink in the checkout (found with lstat, never followed) and every gitlink in the index."""
+
+    def fail(error: OSError) -> None:
+        raise Fatal(f"Cannot list the checkout: {error}")
+
+    found = []
+    for directory, dirs, names in os.walk(repo_dir, onerror=fail, followlinks=False):
+        if directory == repo_dir and ".git" in dirs:
+            dirs.remove(".git")
+        for name in (*dirs, *names):
+            path = os.path.join(directory, name)
+            if os.path.islink(path):
+                found.append(os.path.relpath(path, repo_dir))
+    gitlinks = [path for mode, path in _entries(git.output("ls-files", "-s", "-z")) if mode == "160000"]
+    return sorted(set(found) | set(gitlinks))
+
+
+MAX_LINK_HOPS = 8
+
+
+def _base_link_hop(git: Git, repo_dir: str, base_sha: str, path: str) -> list[str] | None:
+    """The components of the path the base symlink ``path`` points at, lexically; None unless it is safe.
+
+    Safe: a symlink in the checkout with exactly its base target (so the
+    PR did not make or change it), relative, climbing only through leading
+    ``..``, and staying inside the repository. The caller passes a ``path``
+    whose leading directories are real ones, so the climb is exact.
+    """
+    full = os.path.join(repo_dir, path)
+    if not os.path.islink(full):
+        return None  # a gitlink
+    entry = _parse_ls_tree(git.output("ls-tree", "-z", "--full-tree", base_sha, "--", path))
+    if entry is None or entry[:2] != ("120000", "blob") or entry[3] != path:
+        return None
+    target = os.readlink(os.fsencode(full))
+    if target != git.output("cat-file", "blob", entry[2]) or target.startswith(b"/"):
+        return None
+    parts = os.fsdecode(target).split("/")
+    climb = 0
+    while climb < len(parts) and parts[climb] == "..":
+        climb += 1
+    rest = parts[climb:]
+    parent = path.split("/")[:-1]
+    if not rest or any(part in ("", ".", "..") for part in rest) or climb > len(parent):
+        return None
+    return [*parent[: len(parent) - climb], *rest]
+
+
+def _resolve_base_link(git: Git, repo_dir: str, base_sha: str, path: str, seen: list[str]) -> str | None:
+    """The real repository path the base symlink ``path`` leads to, or None.
+
+    Every symlink on the way (the target, or a directory leading to it) must
+    pass ``_base_link_hop`` too; at most MAX_LINK_HOPS symlinks, and a cycle
+    fails.
+    """
+    if path in seen or len(seen) >= MAX_LINK_HOPS:
+        return None
+    seen.append(path)
+    components = _base_link_hop(git, repo_dir, base_sha, path)
+    if components is None:
+        return None
+    current: list[str] = []
+    for component in components:
+        candidate = "/".join([*current, component])
+        if os.path.islink(os.path.join(repo_dir, candidate)):
+            resolved = _resolve_base_link(git, repo_dir, base_sha, candidate, seen)
+            if resolved is None:
+                return None
+            current = resolved.split("/")
+        else:
+            current.append(component)
+    return "/".join(current)
+
+
+def verify_no_linked_directories(
+    git: Git,
+    repo_dir: str,
+    *,
+    base_sha: str,
+    patterns: Sequence[str],
+    scratch_parent: str,
+    env: Mapping[str, str],
+) -> None:
+    """Fails closed on a symlink or a gitlink at or below a directory a pattern names.
+
+    The post-condition of the reset for directories, checked on the result:
+    at any depth and case-insensitively, a path that a directory pattern
+    matches, or a directory a pattern goes through, must not be a gitlink,
+    nor a symlink, with one exception, for bases that link one
+    instruction directory into another ('.claude/skills ->
+    ../.agents/skills'): a symlink passes if (1) it is
+    the base's own (same target as in the base commit), (2) its target is
+    relative, climbs only through leading '..' and stays inside the
+    repository, (3) every symlink on the way to the target passes (1) and
+    (2) as well, at most MAX_LINK_HOPS of them and without a cycle, and (4)
+    the reset patterns match the real path it leads to, so that is reset
+    too. A PR's symlink never qualifies, and a base symlink to anything else
+    could expose files the PR changes. Matching is git's (scratch indexes).
+    """
+    linked = _linked_paths(git, repo_dir)
+    directory_specs = [*pathspecs(p for p in patterns if p.endswith("/")), *container_specs(patterns)]
+    if not linked or not directory_specs:
+        return
+    reset_specs = [*pathspecs(patterns), *container_specs(patterns)]
+    with Coverage(scratch_parent, env, ()) as coverage:
+        try:
+            refused = []
+            for path in coverage.matching(linked, directory_specs):
+                target = _resolve_base_link(git, repo_dir, base_sha, path, [])
+                if target is None or not coverage.matching([target], reset_specs):
+                    refused.append(path)
+        except runner.CommandError as e:
+            raise Fatal(f"Could not check the symlinks and gitlinks of the checkout: {e}.") from e
+    if refused:
+        raise Fatal(
+            f"'{refused[0]}' is a symlink or a gitlink where the reset expects an instruction directory"
+            f" or a directory leading to an instruction file ({len(refused)} such path(s))."
+        )
 
 
 def _parse_ls_tree(listing: bytes) -> tuple[str, str, str, str] | None:
