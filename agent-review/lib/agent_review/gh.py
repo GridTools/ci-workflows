@@ -8,8 +8,9 @@ variables are not honoured by accident, and the tests' fake ``gh`` on
 ``PATH`` keeps working.
 
 Keep the projections in ``gh --jq``: a PR object or a comment body is
-untrusted, and the host must not parse it (invariant 2 in
-docs/agent-review.md). Python receives only the projected fields.
+untrusted, so it is handled only by gh's JSON decoder and our code never
+parses it (invariant 2 in docs/agent-review.md). Python receives only the
+projected fields.
 
 The argument order is fixed: ``gh api [--paginate] [-X METHOD] <endpoint>
 [--input -] [--jq FILTER]``, as the bash scripts call it; the fakes in
