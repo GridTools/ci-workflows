@@ -14,7 +14,12 @@ does):
 - no expression ('${{') inside any 'run:' script, in any workflow file;
 - 'review-keyless' runs the same steps as 'review' except the listed ones;
 - the keyed job's event backstop, concurrency group and per-call artifact
-  names.
+  names;
+- the collect gate: in each review job, 'Collect the result' runs only if
+  the earlier 'Stop the sandbox' step (id 'teardown') succeeded. Its 'if:'
+  is a plain '&&' chain (no '||', no parentheses except 'always()') with
+  that condition as one term. collect-result's single-link check relies on no sandbox
+  process being alive.
 
 Python (docs/adr/0003-python-runtime.md):
 
@@ -323,6 +328,41 @@ def sandbox_output_problems(workflow: Mapping[str, Any], common_sh: str) -> list
         problems.append("no awf call found")
     if DIAG_FILTER not in common_sh:
         problems.append(f"harnesses/common.sh: 'diag' does not end with '{DIAG_FILTER}'")
+    return problems
+
+
+# --- The collect gate -------------------------------------------------------------
+
+COLLECT_STEP = "Collect the result"
+TEARDOWN_ID = "teardown"
+TEARDOWN_SUCCESS = "steps.teardown.outcome == 'success'"
+
+
+def collect_gate_problems(workflow: Mapping[str, Any]) -> list[str]:
+    """'Collect the result' runs only after a successful teardown, in every job that has it."""
+    problems = []
+    found = 0
+    for job_id, job in workflow["jobs"].items():
+        steps = job.get("steps", [])
+        for index, step in enumerate(steps):
+            if step.get("name") != COLLECT_STEP:
+                continue
+            found += 1
+            where = f"{job_id}/{COLLECT_STEP}"
+            if not any(s.get("id") == TEARDOWN_ID for s in steps[:index]):
+                problems.append(f"{where}: no earlier step with id '{TEARDOWN_ID}'")
+            condition = str(step.get("if", "")).strip()
+            if condition.startswith("${{") and condition.endswith("}}"):
+                condition = condition[3:-2].strip()
+            terms = [term.strip() for term in condition.split("&&")]
+            # Only 'always()' may hold parentheses: no grouping, so no '!(...)'.
+            plain = "||" not in condition and all(t == "always()" or not set(t) & set("()") for t in terms)
+            if not plain:
+                problems.append(f"{where}: 'if:' is not a plain '&&' chain: {condition!r}")
+            elif TEARDOWN_SUCCESS not in terms:
+                problems.append(f"{where}: 'if:' does not require {TEARDOWN_SUCCESS!r}: {condition!r}")
+    if found == 0:
+        problems.append(f"no '{COLLECT_STEP}' step found")
     return problems
 
 
