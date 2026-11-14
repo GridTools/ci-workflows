@@ -1,7 +1,6 @@
 # GridTools CI workflows
 
-Reusable GitHub Actions workflows shared by GridTools projects and their
-partners (for example GT4Py and icon4py).
+Reusable GitHub Actions workflows that any repository can call.
 
 **Status: pre-release.** Nothing here is released yet. Both workflows ship
 together in the first release tag (`v0.1.0`); do not call them with a real
@@ -14,10 +13,6 @@ and [PR Agent's](docs/pr-agent.md#release-checklist) release checklists.
 | --- | --- | --- |
 | [`agent-review.yml`](.github/workflows/agent-review.yml) | Advisory pull request review by a coding agent running in a network-restricted sandbox (AWF) | [docs/agent-review.md](docs/agent-review.md) |
 | [`pr-agent.yml`](.github/workflows/pr-agent.yml) | Advisory pull request review and comment commands by [PR Agent](https://github.com/The-PR-Agent/pr-agent), from the diff | [docs/pr-agent.md](docs/pr-agent.md) |
-
-The agent review was designed and security-reviewed in GT4Py first; see
-[GridTools/gt4py#2985](https://github.com/GridTools/gt4py/pull/2985) for the
-design history.
 
 ## Using a workflow
 

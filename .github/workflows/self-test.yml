@@ -6,8 +6,8 @@ name: Self-test
 # 'stub' harness (the keyless job: no environment, no key, no model call,
 # nothing posted) through a LOCAL call, so the commit under test is exactly
 # the one whose files the pipeline fetches. The fixed fixture is a
-# merged public GT4Py pull request whose head is in a fork and which changes
-# AGENTS.md, so the cross-repository fetch by sha and the instruction-file
+# merged public pull request of another repository whose head is in a fork
+# and which changes AGENTS.md at two depths, so the cross-repository fetch by sha and the instruction-file
 # reset run for real.
 
 on:
@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Head of the fixture (GridTools/gt4py PR 2983, set in the 'e2e' inputs).
+  # Head of the agent review's fixture (set in the 'e2e' inputs).
   FIXTURE_HEAD_SHA: 46e9c4f3cecc6571b36b219994f8b126602513ff
   # Head of PR Agent's fixture (this repository's PR 1, set in the
   # 'pr-agent-e2e' inputs).
@@ -231,7 +231,7 @@ jobs:
       pr: "2983"
       test_repository: GridTools/gt4py
       dry_run: true
-      project_name: GT4Py
+      project_name: Self-test
       rule_files: |
         .github/copilot-instructions.md
         AGENTS.md
