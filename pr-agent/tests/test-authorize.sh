@@ -126,7 +126,7 @@ test_comment_setting_args() {
   local b
   for b in '/review --pr_reviewer.x=1' $'/review\n--pr_reviewer.x=1' '/ask "--x"' '/ask " --x=1"' \
     '/review \--x=1' '/review -\-x=1' '/review "-"-x=1' '/review ""--x=1' $'/review\t--x' \
-    $'/review  --x=1' '/review (--x' '/describe ---x=1' '/ask `--x`'; do
+    $'/review \xc2\xa0--x=1' '/review (--x' '/describe ---x=1' '/ask `--x`'; do
     setup_comment "${b}"
     skipped "'--' setting arguments are not accepted" || { echo "    body: '${b}'"; return 1; }
   done
