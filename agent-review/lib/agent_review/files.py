@@ -18,7 +18,19 @@ _FLAGS = os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
 
 
 class UnsafeFileError(OSError):
-    """A file is not a regular file, is too large, or has extra links."""
+    """A file is not a regular file, is too large, or has extra links.
+
+    ``reason`` says which check failed, so that callers need not parse the
+    message: ``"type"`` (not a regular file), ``"links"`` (more than one
+    hard link), ``"size"`` (``fstat`` size over the cap) or ``"grew"`` (the
+    read went past the cap); ``"other"`` if the raiser did not say. ``st`` is
+    the ``fstat`` result of the open file, if there was one.
+    """
+
+    def __init__(self, message: str, reason: str = "other", st: os.stat_result | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.st = st
 
 
 def open_directory(path: str, *, dir_fd: int | None = None) -> int:
@@ -29,11 +41,11 @@ def open_directory(path: str, *, dir_fd: int | None = None) -> int:
 def _check_regular(fd: int, path: str, max_bytes: int, single_link: bool) -> os.stat_result:
     st = os.fstat(fd)
     if not stat.S_ISREG(st.st_mode):
-        raise UnsafeFileError(f"{path}: not a regular file")
+        raise UnsafeFileError(f"{path}: not a regular file", "type", st)
     if single_link and st.st_nlink != 1:
-        raise UnsafeFileError(f"{path}: has {st.st_nlink} hard links")
+        raise UnsafeFileError(f"{path}: has {st.st_nlink} hard links", "links", st)
     if st.st_size > max_bytes:
-        raise UnsafeFileError(f"{path}: {st.st_size} bytes, more than {max_bytes}")
+        raise UnsafeFileError(f"{path}: {st.st_size} bytes, more than {max_bytes}", "size", st)
     return st
 
 
@@ -48,7 +60,7 @@ def read_bytes(path: str, max_bytes: int, *, dir_fd: int | None = None, single_l
         raise ValueError("max_bytes must not be negative")
     fd = os.open(path, os.O_RDONLY | _FLAGS, dir_fd=dir_fd)
     try:
-        _check_regular(fd, path, max_bytes, single_link)
+        st = _check_regular(fd, path, max_bytes, single_link)
         chunks = []
         remaining = max_bytes + 1
         while remaining > 0:
@@ -61,7 +73,7 @@ def read_bytes(path: str, max_bytes: int, *, dir_fd: int | None = None, single_l
         os.close(fd)
     data = b"".join(chunks)
     if len(data) > max_bytes:
-        raise UnsafeFileError(f"{path}: more than {max_bytes} bytes")
+        raise UnsafeFileError(f"{path}: more than {max_bytes} bytes", "grew", st)
     return data
 
 
@@ -82,7 +94,7 @@ def append_bytes(path: str, data: bytes, *, dir_fd: int | None = None) -> None:
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            raise UnsafeFileError(f"{path}: not a regular file")
+            raise UnsafeFileError(f"{path}: not a regular file", "type", st)
         _write_all(fd, data)
     finally:
         os.close(fd)

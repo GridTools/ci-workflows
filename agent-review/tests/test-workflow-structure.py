@@ -16,6 +16,7 @@ from workflow_structure import (
     WORKFLOWS,
     ast_problems,
     call_site_problems,
+    collect_gate_problems,
     entry_problems,
     load,
     python_word_problems,
@@ -167,6 +168,7 @@ def main() -> int:
         sandbox_output_problems(workflow, repo["shell"]["harnesses/common.sh"]),
         "sandbox output: prefixed, no carriage return, no legacy '##[' (awf steps and diag)",
     )
+    check_problems(collect_gate_problems(workflow), "'Collect the result' runs only after a successful teardown")
     check_problems(entry_problems(repo["entries"], repo["lib"]), "bin/: bash scripts or the exact Python template")
     check_problems(tree_problems(repo["index"]), "tree: no symlink, .pth, .pyc, __pycache__, *customize.py")
     check_problems(shebang_problems(repo["first_lines"]), "no Python shebang outside lib/agent_review/ and tests/")

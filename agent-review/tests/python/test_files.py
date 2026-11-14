@@ -94,3 +94,45 @@ def test_append_refuses_a_symlink(tmp_path: pathlib.Path) -> None:
     files.append_bytes(str(tmp_path / "real"), b"x")
     files.append_bytes(str(tmp_path / "real"), b"y")
     assert (tmp_path / "real").read_bytes() == b"xy"
+
+
+def _reason(path: str, max_bytes: int, **kwargs: bool) -> str:
+    with pytest.raises(files.UnsafeFileError) as e:
+        files.read_bytes(path, max_bytes, **kwargs)
+    assert isinstance(e.value.st, os.stat_result)
+    return e.value.reason
+
+
+def test_reasons(tmp_path: pathlib.Path) -> None:
+    os.mkfifo(tmp_path / "fifo")
+    (tmp_path / "f").write_bytes(b"x" * 11)
+    os.link(tmp_path / "f", tmp_path / "g")
+    assert _reason(str(tmp_path / "fifo"), 100) == "type"
+    assert _reason(str(tmp_path), 100) == "type"
+    assert _reason(str(tmp_path / "f"), 100, single_link=True) == "links"
+    assert _reason(str(tmp_path / "f"), 10) == "size"
+
+
+def test_reason_grew(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file that grows past the cap after the fstat check is refused."""
+    (tmp_path / "f").write_bytes(b"x" * 10)
+    real_read = os.read
+
+    def growing_read(fd: int, n: int) -> bytes:
+        with open(tmp_path / "f", "ab") as f:
+            f.write(b"y" * 10)
+        return real_read(fd, n)
+
+    monkeypatch.setattr(os, "read", growing_read)
+    with pytest.raises(files.UnsafeFileError, match="more than 10 bytes") as e:
+        files.read_bytes(str(tmp_path / "f"), 10)
+    assert e.value.reason == "grew"
+    assert e.value.st is not None
+    assert e.value.st.st_size == 10
+
+
+def test_unsafe_file_error_old_form() -> None:
+    """Raising it with a message only still works (callers written before 'reason')."""
+    e = files.UnsafeFileError("x: refused")
+    assert (str(e), e.reason, e.st) == ("x: refused", "other", None)
+    assert isinstance(e, OSError)

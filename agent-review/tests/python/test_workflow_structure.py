@@ -488,3 +488,79 @@ def test_diag_breaks_legacy_commands(tmp_path: pathlib.Path) -> None:
     )
     result = subprocess.run(["/usr/bin/bash", str(script)], capture_output=True, timeout=30, check=True)
     assert result.stderr == "t| a #\u200b#[warning]x\nt| ::error::y\n".encode()
+
+
+# --- The collect gate -------------------------------------------------------------
+
+GATE = "always() && steps.key.outputs.skipped != 'true' && steps.teardown.outcome == 'success'"
+
+
+def gate_workflow(condition: object, teardown_id: str = "teardown") -> dict[str, Any]:
+    collect: dict[str, object] = {"name": "Collect the result", "run": "true\n"}
+    if condition is not None:
+        collect["if"] = condition
+    steps = [{"name": "Stop the sandbox", "id": teardown_id, "run": "true\n"}, collect]
+    return {"jobs": {"review": {"steps": steps}, "review-keyless": {"steps": copy.deepcopy(steps)}}}
+
+
+def test_real_collect_gate_passes() -> None:
+    assert ws.collect_gate_problems(WORKFLOW) == []
+    assert (
+        sum(
+            step.get("name") == "Collect the result"
+            for job in WORKFLOW["jobs"].values()
+            for step in job.get("steps", [])
+        )
+        == 2
+    )
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        GATE,
+        f"${{{{ {GATE} }}}}",
+        "steps.teardown.outcome == 'success'",
+        "always() && steps.teardown.outcome == 'success'",
+    ],
+)
+def test_collect_gate_accepts(condition: str) -> None:
+    assert ws.collect_gate_problems(gate_workflow(condition)) == []
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        None,
+        "always()",
+        "always() && steps.key.outputs.skipped != 'true'",
+        "always() && steps.teardown.outcome != 'success'",
+        "always() && steps.teardown.outcome == 'failure'",
+        f"{GATE} || always()",
+        "always() || steps.teardown.outcome == 'success'",
+        "always() && !(steps.key.outputs.skipped == 'true' && steps.teardown.outcome == 'success')",
+        "always() && (steps.teardown.outcome == 'success')",
+        "always() && steps.teardown.conclusion == 'success'",
+    ],
+)
+def test_collect_gate_rejects(condition: str | None) -> None:
+    assert len(ws.collect_gate_problems(gate_workflow(condition))) == 2
+
+
+def test_collect_gate_needs_the_teardown_step() -> None:
+    found = ws.collect_gate_problems(gate_workflow(GATE, teardown_id="stop"))
+    assert len(found) == 2
+    assert all("no earlier step with id 'teardown'" in p for p in found)
+
+
+def test_collect_gate_needs_a_collect_step() -> None:
+    assert ws.collect_gate_problems({"jobs": {"review": {"steps": []}}}) == ["no 'Collect the result' step found"]
+
+
+def test_collect_gate_in_the_real_workflow_is_required() -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            if step.get("name") == "Collect the result":
+                step["if"] = step["if"].replace(" && steps.teardown.outcome == 'success'", "")
+    assert len(ws.collect_gate_problems(workflow)) == 2
