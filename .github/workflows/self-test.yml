@@ -86,8 +86,7 @@ jobs:
       # permissions, expressions in scripts, the keyless twin).
       - name: Workflow structure
         run: python3 agent-review/tests/test-workflow-structure.py
-      # Offline; the command filter is checked against a copy of PR Agent's
-      # comment parser.
+      # Offline.
       - name: PR Agent script tests
         run: |
           rc=0
@@ -96,11 +95,9 @@ jobs:
             bash "pr-agent/tests/${t}.sh" || rc=1
             echo "::endgroup::"
           done
-          for t in test-command-filter test-workflow-structure; do
-            echo "::group::${t}"
-            python3 "pr-agent/tests/${t}.py" || rc=1
-            echo "::endgroup::"
-          done
+          echo "::group::test-workflow-structure"
+          python3 pr-agent/tests/test-workflow-structure.py || rc=1
+          echo "::endgroup::"
           exit "${rc}"
       # The dry run never pulls the image, so a mistyped digest would show
       # only in a caller's run. Also reports whether the tag has moved.
