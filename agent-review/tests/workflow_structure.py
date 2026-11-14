@@ -24,10 +24,10 @@ does):
 Python (docs/adr/0003-python-runtime.md):
 
 - call sites: every reference to '<root>/bin/<name>' uses the root allowed
-  for its job and step, and the call form of the file's kind, derived from
-  the file itself: '/usr/bin/python3 -I -S -B <root>/bin/<name>' for a
-  Python entry point, the bash forms for a bash script. Python call sites
-  name the file inline, never through a variable;
+  for its job and step, names an entry point, and is exactly
+  '/usr/bin/python3 -I -S -B <root>/bin/<name>' at the start of a command,
+  with the file named inline, never through a variable (or an existence
+  test, '[ -f "<root>/bin/<name>" ]');
 - no other mention of 'python', no 'pip', no 'setup-python' in
   agent-review.yml; in the shell files under bin/ and harnesses/, only the
   Python call form, with the root in 'ar_root' set from the file's path;
@@ -143,9 +143,8 @@ ROOT_REF = re.compile(r"(\$\{RUNNER_TEMP\}/trusted|/opt/agent-review)/bin/([A-Za
 OPT_FROM_STEP = "Prepare the sandbox inputs"
 TRUSTED_JOBS = ("authorize", "prepare", "publish")
 REVIEW_JOBS = ("review", "review-keyless")
-# What may precede a reference, by kind: the text before it on its line.
+# What may precede a reference: the text before it on its line.
 EXISTENCE_CHECK = '[ -f "'
-BASH_FORMS = ('bash "', "/usr/bin/bash ", "-- ", 'pc="')
 PYTHON_FORMS = {TRUSTED_ROOT: f'{PYTHON_CALL} "', OPT_ROOT: f"{PYTHON_CALL} "}
 # What must follow a Python reference: the closing quote, or a separator.
 PYTHON_AFTER = {TRUSTED_ROOT: re.compile(r'"(?: |$)'), OPT_ROOT: re.compile(r"(?: |$)")}
@@ -196,17 +195,10 @@ def call_site_problems(workflow: Mapping[str, Any], kinds: Mapping[str, str | No
                     continue
                 if before.endswith(EXISTENCE_CHECK) and after.startswith('" ]'):
                     continue
-                if kind == "python":
-                    start = len(before) - len(PYTHON_FORMS[root])
-                    bounded = start == 0 or (start > 0 and CALL_BOUNDARY.fullmatch(before[start - 1]) is not None)
-                    if (
-                        not before.endswith(PYTHON_FORMS[root])
-                        or not bounded
-                        or PYTHON_AFTER[root].match(after) is None
-                    ):
-                        problems.append(f"{where}: bin/{name} is Python; call it exactly as {python_call(root, name)}")
-                elif not before.endswith(BASH_FORMS):
-                    problems.append(f"{where}: bin/{name} is bash; unexpected call form '{line.strip()}'")
+                start = len(before) - len(PYTHON_FORMS[root])
+                bounded = start == 0 or (start > 0 and CALL_BOUNDARY.fullmatch(before[start - 1]) is not None)
+                if not before.endswith(PYTHON_FORMS[root]) or not bounded or PYTHON_AFTER[root].match(after) is None:
+                    problems.append(f"{where}: bin/{name} is Python; call it exactly as {python_call(root, name)}")
     return problems
 
 

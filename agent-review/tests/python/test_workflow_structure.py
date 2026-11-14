@@ -1,10 +1,9 @@
 """The structure checks of workflow_structure.py on crafted inputs.
 
 The call-site rules are tested on a small frozen workflow (``fixture``) with
-the same jobs, roots and call lines as agent-review.yml, in which any set of
-entry points can be ported to Python. So these cases are the evidence that
-the Python branch of each rule works, and no port has to edit them; only
-the "real ... passes" tests read the live tree, whatever its port state.
+the same jobs, roots and call lines as agent-review.yml, which every script
+calls as a Python entry point; each case breaks it in one way. Only the
+"real ... passes" tests read the live tree.
 """
 
 import copy
@@ -24,16 +23,17 @@ ENTRIES = ("authorize", "collect-result", "publish-comment", "run-review")
 TRUSTED = '"${RUNNER_TEMP}/trusted/bin/'
 OPT = "/opt/agent-review/bin/"
 PY = "/usr/bin/python3 -I -S -B "
+# The call of each entry point, as the fixture and agent-review.yml write it.
+CALLS = {
+    "authorize": f'{PY}{TRUSTED}authorize"',
+    "run-review": f"-- {PY}{OPT}run-review --phase fetch",
+    "collect-result": f"{PY}{OPT}collect-result",
+    "publish-comment": f'{PY}{TRUSTED}publish-comment" render',
+}
 
 
-def fixture(python: frozenset[str] = frozenset()) -> dict[str, Any]:
-    """agent-review.yml's call sites, with the entry points in ``python`` ported."""
-
-    def call(name: str, root: str, bash: str) -> str:
-        if name not in python:
-            return bash
-        return f'{PY}{TRUSTED}{name}"' if root == TRUSTED else f"{PY}{OPT}{name}"
-
+def fixture() -> dict[str, Any]:
+    """agent-review.yml's call sites: every entry point called in the Python form."""
     fetch = {"name": "Fetch trusted files", "run": f'[ -f {TRUSTED}run-review" ] || exit 1\n'}
     review_steps = [
         fetch,
@@ -41,40 +41,29 @@ def fixture(python: frozenset[str] = frozenset()) -> dict[str, Any]:
         {"name": "Prepare the sandbox inputs", "run": 'sudo cp -R "${RUNNER_TEMP}/trusted/." /opt/agent-review/\n'},
         {
             "name": "Fetch the pull request in the sandbox",
-            "run": f'sudo -E "${{AWF_BIN}}" -- {call("run-review", OPT, OPT + "run-review")} --phase fetch "${{WS}}"\n',
+            "run": f'sudo -E "${{AWF_BIN}}" {CALLS["run-review"]} "${{WS}}"\n',
         },
-        {
-            "name": "Collect the result",
-            "run": call("collect-result", OPT, f"/usr/bin/bash {OPT}collect-result")
-            + ' "${WS}/out" "${RUNNER_TEMP}/r"\n',
-        },
+        {"name": "Collect the result", "run": f'{CALLS["collect-result"]} "${{WS}}/out" r\n'},
     ]
-    if "publish-comment" in python:
-        render = f"{call('publish-comment', TRUSTED, '')} render --review r.md\n"
-    else:
-        render = f'pc={TRUSTED}publish-comment"\nbash "${{pc}}" render --review r.md\n'
-    post = call("publish-comment", TRUSTED, f'bash {TRUSTED}publish-comment"')
     return {
         "jobs": {
-            "authorize": {
-                "steps": [fetch, {"name": "Authorize", "run": call("authorize", TRUSTED, f'bash {TRUSTED}authorize"')}]
-            },
+            "authorize": {"steps": [fetch, {"name": "Authorize", "run": CALLS["authorize"] + "\n"}]},
             "prepare": {"steps": [fetch, {"name": "Install the harness", "run": "true\n"}]},
             "review": {"steps": copy.deepcopy(review_steps)},
             "review-keyless": {"steps": copy.deepcopy(review_steps)},
             "publish": {
                 "steps": [
                     fetch,
-                    {"name": "Render the review", "run": render},
-                    {"name": "Publish the review", "run": f"url=$({post} post --pr 9)\n"},
+                    {"name": "Render the review", "run": f"{CALLS['publish-comment']} --review r.md\n"},
+                    {"name": "Publish the review", "run": f'url=$({PY}{TRUSTED}publish-comment" post --pr 9)\n'},
                 ]
             },
         }
     }
 
 
-def kinds(python: frozenset[str] = frozenset()) -> dict[str, str | None]:
-    return {name: ("python" if name in python else "bash") for name in ENTRIES}
+def kinds() -> dict[str, str | None]:
+    return dict.fromkeys(ENTRIES, "python")
 
 
 def problems(workflow: dict[str, Any], entry_kinds: dict[str, str | None]) -> list[str]:
@@ -97,67 +86,50 @@ def test_real_workflow_passes() -> None:
     assert ws.python_word_problems(WORKFLOW, KINDS) == []
 
 
-# The bash call snippets the fixture copies from agent-review.yml; checked
-# against the real file only while that script is still bash.
-BASH_SNIPPETS = {
-    "authorize": [f'bash {TRUSTED}authorize"'],
-    "run-review": [f"-- {OPT}run-review --phase fetch", f'[ -f {TRUSTED}run-review" ]'],
-    "collect-result": [f"/usr/bin/bash {OPT}collect-result"],
-    "publish-comment": [f'pc={TRUSTED}publish-comment"', 'bash "${pc}" render', f'bash {TRUSTED}publish-comment" post'],
-}
-
-
 @pytest.mark.parametrize("name", ENTRIES)
-def test_fixture_matches_the_real_call_lines_while_unported(name: str) -> None:
-    if KINDS.get(name) != "bash":
-        pytest.skip(f"bin/{name} is ported")
+def test_fixture_matches_the_real_call_lines(name: str) -> None:
     real = "\n".join(script for _, _, _, script in ws.run_scripts(WORKFLOW))
-    mine = "\n".join(script for _, _, _, script in ws.run_scripts(fixture()))
-    for snippet in BASH_SNIPPETS[name]:
-        assert snippet in real, snippet
-        assert snippet in mine, snippet
+    assert KINDS[name] == "python"
+    assert CALLS[name] in real
 
 
-def test_unported_fixture_passes() -> None:
+def test_fixture_passes() -> None:
     assert problems(fixture(), kinds()) == []
 
 
-@pytest.mark.parametrize("name", ENTRIES)
-def test_each_port_passes_with_the_python_call(name: str) -> None:
-    ported = frozenset({name})
-    assert problems(fixture(ported), kinds(ported)) == []
-
-
-def test_all_ports_together_pass() -> None:
-    ported = frozenset(ENTRIES)
-    assert problems(fixture(ported), kinds(ported)) == []
-
-
-@pytest.mark.parametrize("name", ENTRIES)
-def test_a_ported_file_with_the_old_call_fails(name: str) -> None:
-    found = ws.call_site_problems(fixture(), kinds(frozenset({name})))
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The bash-era call forms, each now a failure.
+        (CALLS["authorize"], f'bash {TRUSTED}authorize"'),
+        (CALLS["run-review"], f"-- {OPT}run-review --phase fetch"),
+        (CALLS["collect-result"], f"/usr/bin/bash {OPT}collect-result"),
+        (
+            f"{CALLS['publish-comment']} --review r.md\n",
+            f'pc={TRUSTED}publish-comment"\n{PY}"${{pc}}" render --review r.md\n',
+        ),
+    ],
+)
+def test_bash_era_call_forms_fail(old: str, new: str) -> None:
+    workflow = fixture()
+    assert edit_runs(workflow, old, new)
+    found = ws.call_site_problems(workflow, kinds())
     assert found
-    assert all(f"bin/{name} is Python" in p for p in found)
-
-
-@pytest.mark.parametrize("name", ENTRIES)
-def test_a_bash_file_with_the_python_call_fails(name: str) -> None:
-    assert problems(fixture(frozenset({name})), kinds())
+    assert all("is Python; call it exactly as" in p for p in found)
 
 
 def test_wrong_root_fails() -> None:
-    ported = frozenset({"authorize", "collect-result"})
-    workflow = fixture(ported)
+    workflow = fixture()
     assert edit_runs(workflow, f'{TRUSTED}authorize"', f"{OPT}authorize")
     assert edit_runs(workflow, f"{OPT}collect-result", f'{TRUSTED}collect-result"')
-    found = ws.call_site_problems(workflow, kinds(ported))
+    found = ws.call_site_problems(workflow, kinds())
     assert any("authorize/Authorize: '/opt/agent-review/bin/authorize'" in p for p in found)
     assert any("review/Collect the result: '${RUNNER_TEMP}/trusted/bin/collect-result'" in p for p in found)
 
 
 def test_trusted_root_in_review_jobs_only_before_the_copy() -> None:
     workflow = fixture()
-    assert edit_runs(workflow, f"-- {OPT}run-review", f'-- {TRUSTED}run-review"')
+    assert edit_runs(workflow, f"{PY}{OPT}run-review", f'{PY}{TRUSTED}run-review"')
     found = ws.call_site_problems(workflow, kinds())
     assert any("Fetch the pull request in the sandbox" in p and "only '/opt/agent-review'" in p for p in found)
 
@@ -172,13 +144,14 @@ def test_trusted_root_in_review_jobs_only_before_the_copy() -> None:
         f'/usr/bin/python3 -ISB {TRUSTED}authorize"',
         f'{TRUSTED}authorize"',
         f'bash {TRUSTED}authorize"',
+        f'"${{HOME}}"{PY}{TRUSTED}authorize"',
+        f'x{PY}{TRUSTED}authorize"',
     ],
 )
-def test_other_python_call_forms_fail(call: str) -> None:
-    ported = frozenset({"authorize"})
-    workflow = fixture(ported)
-    assert edit_runs(workflow, f'{PY}{TRUSTED}authorize"', call)
-    assert problems(workflow, kinds(ported))
+def test_other_call_forms_fail(call: str) -> None:
+    workflow = fixture()
+    assert edit_runs(workflow, CALLS["authorize"], call)
+    assert problems(workflow, kinds())
 
 
 @pytest.mark.parametrize(
@@ -199,11 +172,16 @@ def test_setup_python_fails() -> None:
 
 def test_unknown_entry_point_and_job_fail() -> None:
     workflow = fixture()
-    workflow["jobs"]["extra"] = {"steps": [{"name": "x", "run": f'bash {TRUSTED}authorize"'}]}
-    workflow["jobs"]["prepare"]["steps"].append({"name": "y", "run": f'bash {TRUSTED}nope"'})
+    workflow["jobs"]["extra"] = {"steps": [{"name": "x", "run": CALLS["authorize"] + "\n"}]}
+    workflow["jobs"]["prepare"]["steps"].append({"name": "y", "run": f'{PY}{TRUSTED}nope"\n'})
     found = ws.call_site_problems(workflow, kinds())
     assert any("no allowed root for job 'extra'" in p for p in found)
     assert any("bin/nope is not a known entry point" in p for p in found)
+
+
+def test_a_non_template_file_is_not_an_entry_point() -> None:
+    found = ws.call_site_problems(fixture(), {**kinds(), "authorize": None})
+    assert any("bin/authorize is not a known entry point" in p for p in found)
 
 
 ROOT_LINE = 'ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)'
@@ -261,17 +239,6 @@ def test_shebang_problems() -> None:
 
 def test_real_shebangs_pass() -> None:
     assert ws.shebang_problems(REPO["first_lines"]) == []
-
-
-@pytest.mark.parametrize(
-    "call",
-    [f'"${{HOME}}"{PY}{TRUSTED}authorize"', f'x{PY}{TRUSTED}authorize"'],
-)
-def test_call_needs_a_command_boundary(call: str) -> None:
-    ported = frozenset({"authorize"})
-    workflow = fixture(ported)
-    assert edit_runs(workflow, f'{PY}{TRUSTED}authorize"', call)
-    assert problems(workflow, kinds(ported))
 
 
 def test_real_shell_files_pass() -> None:
