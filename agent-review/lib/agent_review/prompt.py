@@ -83,7 +83,9 @@ def read_pr(path: str) -> tuple[bytes, bytes]:
     """The PR's title and body from the raw API response, as prompt bytes."""
     try:
         data = files.read_bytes(path, PR_JSON_MAX_BYTES)
-        pr = json.loads(data.decode("utf-8", errors="strict"))
+        # Invalid UTF-8 becomes U+FFFD, as jq did: the title and body are
+        # data for the prompt, and an odd byte must not stop the review.
+        pr = json.loads(data.decode("utf-8", errors="replace"))
     except (OSError, ValueError, RecursionError) as e:
         raise Fatal(f"Cannot read the pull request from '{path}': {e}") from e
     if not isinstance(pr, dict):

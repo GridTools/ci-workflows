@@ -323,6 +323,30 @@ def test_cli_and_parameters(tmp_path: pathlib.Path, args: list[str], params: dic
     assert results["python"][0] == 1
 
 
+def test_deep_history_deepens_the_fetch(tmp_path: pathlib.Path) -> None:
+    """The merge base lies beyond the first fetch's depth (50): both deepen to 200."""
+    upstream = Upstream(tmp_path / "upstream")
+    fork_sha, base_sha, head_sha = upstream.make(FORK, {}, {"AGENTS.md": "PR\n"}, depth=60)
+    pair = Pair(tmp_path, env=upstream.env(), rules="AGENTS.md\n")
+    pair.workspaces(head=head_sha, base=base_sha)
+    code, lines = pair.assert_same("--phase", "fetch")
+    assert code == 0, lines
+    # Beyond the first fetch's depth, so it was found only after deepening.
+    assert lines[-1].endswith(f"(merge base {fork_sha}).".encode())
+
+
+def test_files_planted_in_out_are_replaced(fetched: Pair) -> None:
+    """The harness writes its own meta.json and review.md into out/; run-review's win."""
+    fetched.adapter(
+        'printf \'{"status": "ok", "harness": "forged"}\' > "${OUT_DIR}/../out/meta.json"\n'
+        'echo "### Forged" > "${OUT_DIR}/../out/review.md"\n'
+        'echo "### Summary" > "${OUT_DIR}/review.md"\n'
+    )
+    code, _ = fetched.assert_same("--phase", "review")
+    assert code == 0
+    assert (fetched.ws["python"] / "out" / "review.md").read_bytes() == b"### Summary\n"
+
+
 # --- Documented differences ------------------------------------------------------------------
 
 
@@ -439,3 +463,36 @@ def test_legacy_copy_is_the_bash_version() -> None:
     legacy = pathlib.Path(__file__).resolve().parents[1] / "legacy" / "run-review.sh"
     assert legacy.read_text().startswith("#!/usr/bin/env bash\n# In-sandbox driver of the agent review")
     assert shutil.which("jq") and shutil.which("iconv")
+
+
+def test_difference_out_is_recreated_after_the_harness(fetched: Pair) -> None:
+    """bash wrote its results over whatever the harness left in out/ (through a symlink, too)
+    and kept the rest; Python recreates out/, so it holds only run-review's files."""
+    fetched.adapter(
+        'echo "### Forged" > "${OUT_DIR}/../out/review.md"\necho extra > "${OUT_DIR}/../out/extra"\nexit 2\n'
+    )
+    results = fetched.run("--phase", "review")
+    assert results["bash"] == results["python"]
+    assert results["python"][0] == 2
+    assert sorted(p.name for p in (fetched.ws["bash"] / "out").iterdir()) == ["extra", "meta.json", "review.md"]
+    assert sorted(p.name for p in (fetched.ws["python"] / "out").iterdir()) == ["meta.json"]
+
+
+def test_difference_nul_in_a_configuration_list(tmp_path: pathlib.Path) -> None:
+    """GNU grep treats such a list as binary and drops its lines; Python refuses it."""
+    pair = Pair(tmp_path)
+    for root in pair.roots.values():
+        (root / "config" / "rule-files.txt").write_bytes(b"AGENTS.md\0\n")
+    pair.workspaces(head="a" * 40, base="b" * 40)
+    results = pair.run("--phase", "review")
+    assert results["bash"][1] == [b"run-review: No prepared checkout in '<WS>'; run the fetch phase first."]
+    assert results["python"] == (1, [b"run-review: '<ROOT>/config/rule-files.txt' contains a NUL byte."])
+
+
+def test_difference_parameter_with_a_trailing_newline(tmp_path: pathlib.Path) -> None:
+    """'$(jq ...)' dropped the newline and bash accepted the value; Python rejects it, on one log line."""
+    pair = Pair(tmp_path)
+    pair.workspaces(head="a" * 40, base="b" * 40, pr="7\n")
+    results = pair.run("--phase", "review")
+    assert results["bash"][1] == [b"run-review: No prepared checkout in '<WS>'; run the fetch phase first."]
+    assert results["python"] == (1, [b"run-review: Invalid PR number '7\\n'."])

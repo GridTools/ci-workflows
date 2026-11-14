@@ -70,14 +70,21 @@ TIMEOUT_MINUTES = validate.pattern(r"[1-9][0-9]{0,2}")
 STUB_PADDING_KIB = validate.pattern(r"[0-9]{1,5}")
 
 
+def one_line(text: str) -> str:
+    """``text`` with CR and LF escaped: values in messages (a parameter, a path
+    from the PR tree) cannot add lines to the log."""
+    return text.replace("\r", "\\r").replace("\n", "\\n")
+
+
 def _write(stream: Any, text: str) -> None:
-    stream.buffer.write(text.encode("utf-8", errors="surrogateescape"))
+    """One line; non-UTF-8 bytes of a path are written back as they were."""
+    stream.buffer.write((one_line(text) + "\n").encode("utf-8", errors="surrogateescape"))
     stream.flush()
 
 
 def say(text: str) -> None:
     """A progress line on stdout."""
-    _write(sys.stdout, text + "\n")
+    _write(sys.stdout, text)
 
 
 def trusted_root() -> str:
@@ -293,6 +300,10 @@ class Run:
 
         say(f"run-review: running harness '{p.harness}' on {p.repo}#{p.pr_number} at {p.head_sha}.")
         harness_exit = self._run_harness()
+        # The harness can write anywhere in the workspace, 'out/' included:
+        # only what this script writes there from now on is the result.
+        remove(self.result_dir)
+        os.makedirs(self.result_dir)
         status = {0: "ok", 2: "no-review", 124: "timeout", 137: "timeout"}.get(harness_exit, "failed")
 
         # The harness output is agent-controlled: accept only a regular file.
@@ -303,7 +314,7 @@ class Run:
             if status == "ok":
                 status = "no-review"
             self._write_meta(status, harness_exit, truncated=False, review_bytes=0)
-            _write(sys.stderr, f"run-review: no review produced (status '{status}', harness exit {harness_exit}).\n")
+            _write(sys.stderr, f"run-review: no review produced (status '{status}', harness exit {harness_exit}).")
             return EXIT_NO_REVIEW if status == "no-review" else 1
 
         review, truncated = collected
@@ -346,7 +357,7 @@ class Run:
                 check=False,
             )
         except runner.CommandError as e:
-            _write(sys.stderr, f"run-review: {e}\n")
+            _write(sys.stderr, f"run-review: {e}")
             return 127
         return result.returncode if result.returncode >= 0 else 128 - result.returncode
 
@@ -473,5 +484,5 @@ def main(argv: Sequence[str] | None = None) -> int:
         message = str(e)
     except OSError as e:
         message = f"{e.filename or ''}: {e.strerror or e}".lstrip(": ")
-    _write(sys.stderr, f"run-review: {message}\n")
+    _write(sys.stderr, f"run-review: {message}")
     return 1

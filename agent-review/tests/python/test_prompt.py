@@ -78,7 +78,7 @@ def test_lone_surrogate_becomes_a_replacement_character(tmp_path: pathlib.Path) 
     assert prompt.read_pr(str(path)) == ("a\ufffdb".encode(), "\ufffd".encode())
 
 
-@pytest.mark.parametrize("data", [b"[1]", b"not json", b'{"title": "\xff"}', b"[" * 100000])
+@pytest.mark.parametrize("data", [b"[1]", b"not json", b"[" * 100000])
 def test_bad_pr_json_fails(tmp_path: pathlib.Path, data: bytes) -> None:
     path = tmp_path / "pr.json"
     path.write_bytes(data)
@@ -182,3 +182,11 @@ def test_render_is_sequential_like_bash() -> None:
 
 def test_render_template_newlines_and_nul() -> None:
     assert prompt.render(b"a\0b\n\n\n", values(), "n" * 24) == b"ab\n"
+
+
+@pytest.mark.parametrize("raw", [b"a\xffb", b"a\xc3\x28b", b"a\xe2\x82b", b"a\xc0\x80b", b"tail\xe2\x82"])
+def test_invalid_utf8_in_pr_json_matches_jq(tmp_path: pathlib.Path, raw: bytes) -> None:
+    """jq replaces invalid bytes with U+FFFD and goes on; so does read_pr."""
+    path = tmp_path / "pr.json"
+    path.write_bytes(b'{"title": "' + raw + b'", "body": "' + raw + b'"}')
+    assert prompt.read_pr(str(path)) == bash_fields(path)

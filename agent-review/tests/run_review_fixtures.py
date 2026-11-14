@@ -82,12 +82,17 @@ class Upstream:
         git(path, "init", "-q", "-b", "main")
         git(path, "config", "uploadpack.allowAnySHA1InWant", "true")
 
-    def make(self, fork: Tree, base: Tree, head: Tree) -> tuple[str, str, str]:
-        """(fork, base, head): base and head both branch off the fork point."""
+    def make(self, fork: Tree, base: Tree, head: Tree, *, depth: int = 0) -> tuple[str, str, str]:
+        """(fork, base, head): base and head both branch off the fork point,
+        each ``depth`` commits further away than the one commit that applies its tree."""
         fork_sha = commit(self.path, fork, "fork")
         git(self.path, "checkout", "-q", "-b", "pr")
+        for i in range(depth):
+            commit(self.path, {"pr-history.txt": f"{i}\n"}, f"pr {i}")
         head_sha = commit(self.path, head, "head")
         git(self.path, "checkout", "-q", "main")
+        for i in range(depth):
+            commit(self.path, {"base-history.txt": f"{i}\n"}, f"base {i}")
         base_sha = commit(self.path, base, "base")
         return fork_sha, base_sha, head_sha
 

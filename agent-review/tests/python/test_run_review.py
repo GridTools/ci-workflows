@@ -346,3 +346,7 @@ def test_coverage_scratch_is_removed(tmp_path: pathlib.Path) -> None:
     result = run_entry(root, ["--phase", "review", str(ws)])
     assert b"run the fetch phase first" in result.stdout
     assert sorted(p.name for p in ws.iterdir()) == ["in"]
+
+
+def test_messages_are_one_line() -> None:
+    assert run_review.one_line("a\nb\r\nc") == "a\\nb\\r\\nc"
