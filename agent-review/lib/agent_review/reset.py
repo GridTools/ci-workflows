@@ -447,7 +447,7 @@ def verify_no_linked_directories(
     linked = _linked_paths(git, repo_dir)
     if not linked:
         return
-    link_specs = [*pathspecs(p for p in patterns if p.endswith("/")), *container_specs(patterns)]
+    link_specs = [*pathspecs(patterns), *container_specs(patterns)]
     file_specs = pathspecs(patterns)
     dir_specs = directory_target_specs(patterns)
     refused: list[tuple[str, str | None]] = []

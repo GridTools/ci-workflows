@@ -668,7 +668,7 @@ def test_truncation_is_decided_from_the_bytes_read(tmp_path: pathlib.Path, monke
     assert review.endswith(run_review.TRUNCATION_NOTE)
 
 
-# --- Base symlinks to paths the reset does not cover (integration review F2) ---------------
+# --- Base symlinks to paths the reset does not cover (integration review F1, F2) ---------------
 
 UNCOVERED = "which the reset does not cover, so the agent would read the pull request's version"
 
@@ -718,6 +718,34 @@ def assert_stopped(ws: pathlib.Path, log: str) -> None:
             {"extra": "guides/*/README.md\n"},
             UNCOVERED,
         ),
+        # F1: a base symlink matched by a FILE pattern, to a file no pattern
+        # resets, which the PR edits.
+        (
+            {"CONTRIBUTING.md": "base contrib\n", "AGENTS.md": "-> CONTRIBUTING.md"},
+            {"CONTRIBUTING.md": "PR EVIL\n"},
+            {},
+            "'AGENTS.md' is a symlink in the base commit to 'CONTRIBUTING.md', " + UNCOVERED,
+        ),
+        (
+            {"docs/guide.md": "base\n", "CLAUDE.md": "-> docs/guide.md"},
+            {"docs/guide.md": "PR EVIL\n"},
+            {},
+            "add 'docs/guide.md' to instruction_files",
+        ),
+        (
+            {"docs/c.md": "base\n", ".github/copilot-instructions.md": "-> ../docs/c.md"},
+            {"docs/c.md": "PR EVIL\n"},
+            {},
+            "'.github/copilot-instructions.md' is a symlink in the base commit to 'docs/c.md', " + UNCOVERED,
+        ),
+        # A rule file that is a base symlink: the S4 post-condition holds (the
+        # link is its base version), the content would be the PR's.
+        (
+            {"docs/guide.md": "base\n", "docs/RULES.md": "-> guide.md"},
+            {"docs/guide.md": "PR EVIL\n"},
+            {"rules": "docs/RULES.md\n"},
+            "'docs/RULES.md' is a symlink in the base commit to 'docs/guide.md', " + UNCOVERED,
+        ),
     ],
 )
 def test_base_symlink_to_an_uncovered_path_fails_closed(  # noqa: PLR0917 (pytest parameters)
@@ -747,6 +775,30 @@ def test_existing_case_fails_closed_under_wildcard_caller_patterns(
 @pytest.mark.parametrize(
     ("fork", "head", "root_args", "link", "content"),
     [
+        # Both ends reset: the link reads the base version of its target.
+        (
+            {"CLAUDE.md": "base claude\n", "AGENTS.md": "-> CLAUDE.md"},
+            {"CLAUDE.md": "PR EVIL\n"},
+            {},
+            "AGENTS.md",
+            "base claude\n",
+        ),
+        # The target matches a central pattern case-insensitively ('AGENTS.md').
+        (
+            {"docs/agents.md": "base agents\n", "CLAUDE.md": "-> docs/agents.md"},
+            {"docs/agents.md": "PR EVIL\n"},
+            {},
+            "CLAUDE.md",
+            "base agents\n",
+        ),
+        # The documented remedy: the caller adds the target to instruction_files.
+        (
+            {"CONTRIBUTING.md": "base contrib\n", "AGENTS.md": "-> CONTRIBUTING.md"},
+            {"CONTRIBUTING.md": "PR EVIL\n"},
+            {"extra": "CONTRIBUTING.md\n"},
+            "AGENTS.md",
+            "base contrib\n",
+        ),
         (
             {"docs/x/SKILL.md": "base\n", ".claude/skills": "-> ../docs"},
             {"docs/x/SKILL.md": "PR EVIL\n"},
