@@ -2,8 +2,8 @@
 # The 'authorize' step of PR Agent: validates the caller's static inputs,
 # decides whether this event may run PR Agent and checks the actor's
 # permission. The only gate: 'pull_request_target' ignores fork approval.
-# Commands and their arguments are PR Agent's to parse; the comment body is
-# never read here.
+# Any command is allowed; comments with setting arguments are refused
+# (bin/check-command).
 #
 # Usage: authorize   (configuration in the environment, see below)
 #
@@ -15,7 +15,8 @@
 #   REPO EVENT ACTION                      github context
 #   PR_NUMBER PR_AUTHOR PR_DRAFT PR_HEAD_REPO
 #                                          'pull_request*' payload
-#   ISSUE_NUMBER ISSUE_IS_PR COMMENTER     'issue_comment' payload
+#   ISSUE_NUMBER ISSUE_IS_PR COMMENTER BODY
+#                                          'issue_comment' payload
 #   IN_API_BASE IN_ENVIRONMENT IN_DOCS_URL IN_DRY_RUN IN_TEST_PR
 #   TRUSTED_REPO TRUSTED_SHA               job.workflow_repository/_sha
 #   CALLER_WF_SHA                          the caller's github.workflow_sha
@@ -25,7 +26,8 @@
 # Events:
 #   pull_request_target  'opened', 'reopened', 'ready_for_review' of a
 #                        non-draft PR; writer check on the PR author
-#   issue_comment        'created' on a PR; writer check on the commenter
+#   issue_comment        'created' on a PR; bin/check-command; writer check on
+#                        the commenter
 #   pull_request         caller test mode, as 'pull_request_target'; the
 #                        caller's workflow file is PR content here
 #   push, schedule, workflow_dispatch, pull_request with 'test_pr'
@@ -44,7 +46,7 @@ TRUSTED_ROOT=$(cd "${BIN_DIR}/.." && pwd)
 
 : "${GITHUB_OUTPUT:?}"
 for v in REPO EVENT ACTION PR_NUMBER PR_AUTHOR PR_DRAFT PR_HEAD_REPO ISSUE_NUMBER ISSUE_IS_PR \
-  COMMENTER IN_API_BASE IN_ENVIRONMENT IN_DOCS_URL IN_DRY_RUN IN_TEST_PR TRUSTED_REPO \
+  COMMENTER BODY IN_API_BASE IN_ENVIRONMENT IN_DOCS_URL IN_DRY_RUN IN_TEST_PR TRUSTED_REPO \
   TRUSTED_SHA CALLER_WF_SHA HAS_SHARED_KEY; do
   declare -g "${v}=${!v-}"
 done
@@ -137,6 +139,9 @@ else
     issue_comment)
       [ "${ACTION}" = created ] || skip "Action '${ACTION}' of 'issue_comment' does not start PR Agent."
       [ "${ISSUE_IS_PR}" = true ] || skip "Comment on an issue, not a pull request."
+      if ! reason=$(BODY=${BODY} bash "${BIN_DIR}/check-command"); then
+        skip "${reason}"
+      fi
       actor=${COMMENTER}
       pr=${ISSUE_NUMBER}
       ;;

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Refuses PR comments that carry PR Agent setting arguments.
+#
+# Usage: BODY=<comment body> check-command
+# Exit 0 and print nothing if allowed; exit 1 and print the reason if not.
+#
+# Any command is allowed; '--section.key=value' arguments are not. PR Agent
+# refuses only host-only keys from comments, and the others reach Dynaconf as
+# values: '--auto_cast_for_dynaconf=true' re-enables its '@format' directive,
+# after which another argument such as '--pr_reviewer.extra_instructions=
+# "@format {env[OPENAI.KEY]}"' resolves to the inference key, which '/config'
+# publishes. Refusing every setting argument closes that and any similar
+# route, and keeps the step environment's settings in force.
+#
+# PR Agent v0.50.0 splits a comment with shlex (posix, whitespace_split,
+# quotes '"', no commenters) after Python's strip(), and treats an argument as
+# a setting if arg.strip() starts with '--'. Quotes and backslashes vanish in
+# that lexer, so '\--x', '-\-x' and '"-"-x' all become '--x'. This check
+# over-approximates instead of re-implementing the lexer: with '"' and '\'
+# deleted, any '--' not directly after an ASCII letter, digit or '_' is
+# refused. tests/test-command-filter.py checks it against the real lexer.
+
+set -euo pipefail
+export LC_ALL=C
+
+stripped=${BODY-}
+stripped=${stripped//[\"\\]/}
+if [[ "${stripped}" =~ (^|[^A-Za-z0-9_])-- ]]; then
+  echo "Ignoring the command: '--' setting arguments are not accepted."
+  exit 1
+fi

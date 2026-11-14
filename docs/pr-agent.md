@@ -87,7 +87,8 @@ Before merging the caller, its plumbing can be tested in [caller test mode](#cal
 ## Usage
 
 - `/review` runs automatically when a non-draft PR is opened, reopened or marked ready, if its **author** has write access. Bot-authored PRs and PRs matching PR Agent's default `ignore_pr_title` (`^\[Auto\]`) are skipped.
-- Users with write access can comment PR Agent's commands, such as `/review`, `/improve`, `/ask "<question>"`, `/describe` or `/help`, on any PR, including a draft or a fork's. The **commenter's** permission is checked; the command and its arguments are left to PR Agent. By default `/describe` posts its summary as a comment and never edits the PR description.
+- Users with write access can comment PR Agent's commands, such as `/review`, `/improve`, `/ask "<question>"`, `/describe` or `/help`, on any PR, including a draft or a fork's. The **commenter's** permission is checked. Any PR Agent command runs; `/describe` posts its summary as a comment and never edits the PR description.
+- Comments with `--section.key=value` setting arguments are refused with a notice in the run: they could read the inference key (see [Security invariants](#security-invariants), item 3). Since PR Agent strips quotes and backslashes, `--` is refused anywhere it does not directly follow a letter, digit or `_` (`a--b` in a question is fine; `"--x"` is not). Single-dash arguments such as `/review -i` are fine.
 - Any comment from a writer that starts with `/` runs the `pr-agent` job: a `/word` that is not a PR Agent command makes PR Agent fail, which posts the failure comment.
 - `triage` is not enough: the permission API reports it as `read`. `maintain` reports as `write`.
 
@@ -95,7 +96,7 @@ Before merging the caller, its plumbing can be tested in [caller test mode](#cal
 
 | Job | Holds | Does |
 | --- | --- | --- |
-| `authorize` | read token, **no secrets**, no environment | Fetches [`pr-agent/`](../pr-agent/) from this workflow's own commit (`job.workflow_repository`@`job.workflow_sha`), runs [`bin/authorize`](../pr-agent/bin/authorize) (inputs, event rules, the writer check, fail-closed on API errors; it never reads the comment) and [`bin/resolve-models`](../pr-agent/bin/resolve-models) (model chain, limits, step timeout). |
+| `authorize` | read token, **no secrets**, no environment | Fetches [`pr-agent/`](../pr-agent/) from this workflow's own commit (`job.workflow_repository`@`job.workflow_sha`), runs [`bin/authorize`](../pr-agent/bin/authorize) (inputs, event rules, [`bin/check-command`](../pr-agent/bin/check-command), the writer check, fail-closed on API errors) and [`bin/resolve-models`](../pr-agent/bin/resolve-models) (model chain, limits, step timeout). |
 | `pr-agent` | the key (caller's environment), write token for issues and PRs | Only if authorized and not a dry run. Checks that the key arrived, then runs the image pinned by digest with `continue-on-error` and the derived step timeout. No checkout and no script of ours. |
 | `report` | write token, **no secrets** | After `pr-agent`, even if that job failed: [`bin/report-outcome`](../pr-agent/bin/report-outcome) posts or updates one failure comment (marker `<!-- pr-agent-run-failed -->`), deleting older duplicates, or deletes them all after a success. A cancelled run reports nothing. Serialized per PR (its own concurrency group, never cancelled in progress), so overlapping runs cannot duplicate the comment; of several queued reports, GitHub keeps only the newest. |
 
@@ -109,7 +110,7 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 
 1. **Never check out or run PR code** (no `actions/checkout`, no script in the `pr-agent` job), and never grant `contents: write`. PR Agent reads the diff through the API.
 2. **`authorize` is the only gate**: `pull_request_target` ignores the fork-approval setting. It requires write access from the PR author (automatic runs) or the commenter (commands) and fails closed. `author_association` is not used: it hides private organization members and does not imply write access.
-3. **By default, model output writes no labels and no PR description**: review labels and `/describe` labels are off, and `/describe` posts a comment. These settings are in the step environment, so a failed fetch of `.pr_agent.toml` cannot re-enable them. They are defaults, not guarantees: the caller's `.pr_agent.toml` (a reviewed change) and a writer's comment can change them (see [What remains risky](#what-remains-risky)).
+3. **No setting arguments from comments.** PR Agent refuses only host-only keys from comments; every other `--section.key=value` reaches its settings library (Dynaconf) as a value. `--auto_cast_for_dynaconf=true` re-enables Dynaconf's `@format` directive, after which `--pr_reviewer.extra_instructions="@format {env[OPENAI.KEY]}"` resolves to the key, and `/config` publishes it. [`bin/check-command`](../pr-agent/bin/check-command) therefore refuses every comment with a setting argument; [`test-command-filter.py`](../pr-agent/tests/test-command-filter.py) checks it against a copy of PR Agent's comment parser and fails when the image changes until the copy is re-checked. This also keeps the step environment's settings in force: review labels and `/describe` labels are off and `/describe` posts a comment, set in the step environment so that a failed fetch of `.pr_agent.toml` cannot re-enable them (a reviewed change to `.pr_agent.toml` still can).
 4. **The key is only in the `pr-agent` job**, which alone declares the caller's environment, only in the PR Agent step and a boolean check, and goes only to an endpoint of [`api-bases.txt`](../pr-agent/api-bases.txt) in the pinned commit. [`test-workflow-structure.py`](../pr-agent/tests/test-workflow-structure.py) checks this.
 5. **The image is pinned by digest**, since it receives the key; the self-test checks that the digest exists and whether its tag has moved.
 6. **The scripts come from this workflow's own commit**, fetched as a tarball and checked to be the same commit in every job; never from the caller or the PR.
@@ -120,7 +121,8 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 - **Prompt injection can steer the review's content**: a PR's diff, title and description are model input. The review is advisory, never a status, and writes no labels or description.
 - **Budget burn**: every writer's PR and every command spends the key's budget. A diff over the token budget is sent in up to three chunks, each billed. The dedicated key's budget is the cap.
 - **Writers can steer settings through `.pr_agent.toml`**, by a reviewed PR to the default branch; the settings in the step environment are defaults for it, not ceilings.
-- **Writers' comments can run any PR Agent command and override any setting that is not host-only, for that command**: for example `/generate_labels` writes labels, `/describe --pr_description.publish_description_as_comment=false` rewrites the PR description with model output (derived from untrusted PR content), and `--config.model=...` picks another model. PR Agent itself refuses only host-only settings (the key, endpoints, URLs, tokens, approvals), so the key cannot be read or redirected this way. Commands that need `contents: write` (`/update_changelog`) fail, since no job has it.
+- **Writers' comments can run any PR Agent command**: `/generate_labels` writes labels derived from untrusted PR content, and any `/word` from a writer starts the keyed job (a non-command ends in a failure comment). Commands that need `contents: write` (`/update_changelog`) fail, since no job has it.
+- **`.pr_agent.toml` is trusted**: it is read through the same settings library, so a reviewed change to it could also use Dynaconf directives. Review it like code.
 - **Central changes reach every caller that updates its pin**, as for the agent review ([What remains risky](agent-review.md#what-remains-risky)).
 - **Caller test mode with the key** (below) runs the caller's workflow file from the PR branch; the environment's branch rule is what keeps that from happening outside a deliberate test.
 
@@ -145,7 +147,7 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 This repository's [`self-test.yml`](../.github/workflows/self-test.yml) runs on every pull request, on `main`, weekly and on demand:
 
 - pre-commit (actionlint, shellcheck) and zizmor on the workflows;
-- the script tests: [`test-authorize.sh`](../pr-agent/tests/test-authorize.sh) (permission levels, API errors, the event matrix, inputs), [`test-resolve-models.sh`](../pr-agent/tests/test-resolve-models.sh) (every validation and the derived timeout), [`test-report-outcome.sh`](../pr-agent/tests/test-report-outcome.sh) (0, 1 and several comments, success and failure, job results) and the [structure test](../pr-agent/tests/test-workflow-structure.py);
+- the script tests: [`test-authorize.sh`](../pr-agent/tests/test-authorize.sh) (permission levels, API errors, the event matrix, inputs, setting arguments, long comments), [`test-command-filter.py`](../pr-agent/tests/test-command-filter.py) (differential, against PR Agent 0.50.0's parser), [`test-resolve-models.sh`](../pr-agent/tests/test-resolve-models.sh) (every validation and the derived timeout), [`test-report-outcome.sh`](../pr-agent/tests/test-report-outcome.sh) (0, 1 and several comments, success and failure, job results) and the [structure test](../pr-agent/tests/test-workflow-structure.py);
 - that the pinned image digest exists, and a warning if its tag has moved;
 - the keyless path through a **local** call with `test_pr` (this repository's merged PR 1, forced dry run): `authorize` and `Resolve models` run on the commit under test, `pr-agent` and `report` are skipped, and no deployment is recorded.
 
@@ -165,7 +167,7 @@ The failure comment's marker, `<!-- pr-agent-run-failed -->`, is the one in-repo
 
 ## Upgrading PR Agent
 
-Change the digest and the tag comment together, after checking the new release's notes. Then re-check against the new source: the host-only keys (`pr_agent/config_security.py`, `pr_agent/algo/cli_args.py`), which keep comments away from the key and the endpoint, and the settings in the step environment. Release it as a change that callers review.
+Change the digest and the tag comment together, after checking the new release's notes. Then re-check against the new source: the comment parser that [`test-command-filter.py`](../pr-agent/tests/test-command-filter.py) copies (the test fails until its pinned digest is updated), how settings reach Dynaconf (`update_settings_from_args`, `AUTO_CAST_FOR_DYNACONF`), the host-only keys (`pr_agent/config_security.py`), and the settings in the step environment. Release it as a change that callers review.
 
 ## Releases
 
@@ -177,5 +179,5 @@ In addition to the agent review's [release checklist](agent-review.md#release-ch
 
 1. A caller test with the key (`pull_request`, environment widened to the test branch) on a fixture PR: a posted review, the `Applying repo settings (sections: [...])` log line, `Model 'openai/...'` in `authorize`.
 2. A forced failure (`ai_timeout: "1"`): the failure comment is posted; a following successful run removes it.
-3. A non-writer's PR and a non-writer's `/review`: skipped with a notice, no `pr-agent` job, no deployment.
+3. A non-writer's PR, a non-writer's `/review` and a writer's comment with a `--` argument: skipped with a notice, no `pr-agent` job, no deployment.
 4. After a caller switches over, one `pull_request_target` run and one `/review` comment from the default branch; record what the deployment shows on the PR.

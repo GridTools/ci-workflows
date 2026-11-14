@@ -109,8 +109,8 @@ def main() -> int:
           "'pr-agent' exports the step outcome, not its conclusion")
 
     auth_env = next(s for s in jobs["authorize"]["steps"] if s["name"] == "Authorize")["env"]
-    check(not any("comment.body" in str(v) for v in auth_env.values()),
-          "the comment body is not passed to 'authorize' (PR Agent parses commands)")
+    check(auth_env.get("BODY") == "${{ github.event.comment.body }}",
+          "'authorize' gets the comment body, through the environment, for bin/check-command")
 
     resolve = next(s for s in jobs["authorize"]["steps"] if s["name"] == "Resolve models")
     check(str(agent["timeout-minutes"]) == resolve["env"]["JOB_TIMEOUT"],

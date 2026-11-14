@@ -162,6 +162,7 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_IS_PR: ${{ github.event.issue.pull_request != null }}
           COMMENTER: ${{ github.event.comment.user.login }}
+          BODY: ${{ github.event.comment.body }}
           IN_API_BASE: ${{ inputs.api_base }}
           IN_ENVIRONMENT: ${{ inputs.environment }}
           IN_DOCS_URL: ${{ inputs.docs_url }}

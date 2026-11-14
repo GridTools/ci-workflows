@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for bin/authorize: inputs, the event matrix and the writer
-# check. Offline: 'gh' is a fake on
+# Unit tests for bin/authorize and bin/check-command: inputs, the event
+# matrix, the '--' filter and the writer check. Offline: 'gh' is a fake on
 # PATH that answers the two API calls the script makes.
 #
 # Run: bash pr-agent/tests/test-authorize.sh
@@ -35,15 +35,15 @@ EOS
   export FAKE_HEAD=${HEAD} FAKE_PERM=write
   export REPO=${CALLER} EVENT=pull_request_target ACTION=opened
   export PR_NUMBER=12 PR_AUTHOR=author PR_DRAFT=false PR_HEAD_REPO=someone/example
-  export ISSUE_NUMBER='' ISSUE_IS_PR=false COMMENTER=''
+  export ISSUE_NUMBER='' ISSUE_IS_PR=false COMMENTER='' BODY=''
   export IN_API_BASE=${CSCS} IN_ENVIRONMENT=pr-agent IN_DOCS_URL='' IN_DRY_RUN=false IN_TEST_PR=''
   export TRUSTED_REPO=${CENTRAL} TRUSTED_SHA=${WF_SHA} CALLER_WF_SHA=${CALLER_SHA} HAS_SHARED_KEY=false
 }
 # An 'issue_comment' on a pull request.
-setup_comment() {
+setup_comment() { # body
   setup
   export EVENT=issue_comment ACTION=created PR_NUMBER='' PR_AUTHOR='' PR_DRAFT='' PR_HEAD_REPO=''
-  export ISSUE_NUMBER=34 ISSUE_IS_PR=true COMMENTER=commenter
+  export ISSUE_NUMBER=34 ISSUE_IS_PR=true COMMENTER=commenter BODY=$1
 }
 
 run() { bash "${PA_DIR}/bin/authorize" >log 2>&1; }
@@ -105,22 +105,45 @@ test_invalid_actor() { setup; export PR_AUTHOR='a/../b'; denied "Invalid actor '
 test_bot_actor_format() { setup; export PR_AUTHOR='renovate[bot]'; allowed; }
 
 # --- Comments ---------------------------------------------------------------------
-# Commands and their arguments are PR Agent's to parse: 'authorize' never reads
-# the comment, so the body is not even in its environment.
+# Any command; no '--' setting arguments (they could re-enable Dynaconf's
+# '@format' and read the key).
 test_comment_review() {
-  setup_comment
+  setup_comment /review
   allowed && assert "pr is the issue" test "$(out pr)" = 34 &&
     assert "commenter checked" grep -qF "collaborators/commenter/permission" gh.log
 }
-test_comment_body_is_not_read() {
-  setup_comment
-  export BODY='/generate_labels --pr_description.publish_labels=true'
-  allowed && assert "no mention of the body" bash -c "! grep -qF 'generate_labels' log"
+test_comment_any_command() {
+  local c
+  for c in /review /improve '/ask "why?"' /describe /help /config /generate_labels '/review -i' \
+    $'/review\n' $'/ask what\tis this' '/ask what does a--b do, and x_--y?'; do
+    setup_comment "${c}"; allowed || { echo "    body: '${c}'"; return 1; }
+  done
 }
-test_comment_edited() { setup_comment; export ACTION=edited; skipped "Action 'edited' of 'issue_comment'"; }
-test_comment_on_issue() { setup_comment; export ISSUE_IS_PR=false; skipped "Comment on an issue"; }
-test_comment_non_writer() { setup_comment; export FAKE_PERM=read; skipped "commenter has 'read' permission"; }
-test_comment_api_error() { setup_comment; export FAKE_GH_FAIL=1; denied "Could not resolve repository permission for 'commenter'"; }
+test_comment_setting_args() {
+  local b
+  for b in '/review --pr_reviewer.x=1' $'/review\n--pr_reviewer.x=1' '/ask "--x"' '/ask " --x=1"' \
+    '/review \--x=1' '/review -\-x=1' '/review "-"-x=1' '/review ""--x=1' $'/review\t--x' \
+    $'/review \xc2\xa0--x=1' '/review (--x' '/describe ---x=1' '/ask `--x`' \
+    '/config --auto_cast_for_dynaconf=true --pr_reviewer.extra_instructions="@format {env[OPENAI.KEY]}"'; do
+    setup_comment "${b}"
+    skipped "'--' setting arguments are not accepted" || { echo "    body: '${b}'"; return 1; }
+    assert "no API call" test ! -e gh.log || return 1
+  done
+}
+test_comment_long_bodies() {
+  local pad
+  pad=$(head -c 120000 /dev/zero | tr '\0' 'a')
+  setup_comment "/ask --x ${pad}"
+  skipped "'--' setting arguments" || return 1
+  setup_comment "/ask ${pad} \\--x=1"
+  skipped "'--' setting arguments" || return 1
+  setup_comment "/ask ${pad} a--b"
+  allowed
+}
+test_comment_edited() { setup_comment /review; export ACTION=edited; skipped "Action 'edited' of 'issue_comment'"; }
+test_comment_on_issue() { setup_comment /review; export ISSUE_IS_PR=false; skipped "Comment on an issue"; }
+test_comment_non_writer() { setup_comment /review; export FAKE_PERM=read; skipped "commenter has 'read' permission"; }
+test_comment_api_error() { setup_comment /review; export FAKE_GH_FAIL=1; denied "Could not resolve repository permission for 'commenter'"; }
 
 # --- Caller test mode ---------------------------------------------------------------
 test_pull_request_same_repo() {
