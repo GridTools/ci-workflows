@@ -20,8 +20,9 @@ from agent_review import runner, validate
 
 METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 # A relative API path with an optional query: never an option ('-...'), a
-# URL or a host.
-ENDPOINT = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._~/%-]*(?:\?[A-Za-z0-9._~%=&-]*)?")
+# URL or a host. '[' and ']' only in the path, for bot logins such as
+# 'dependabot[bot]' (bash passed them through to gh as they are).
+ENDPOINT = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._~/%\[\]-]*(?:\?[A-Za-z0-9._~%=&-]*)?")
 
 
 def api(
@@ -32,12 +33,15 @@ def api(
     paginate: bool = False,
     body: bytes | None = None,
     timeout: float | None = 120,
+    stderr_is_error: bool = False,
 ) -> bytes:
     """Runs ``gh api`` on the trusted host and returns its stdout.
 
     ``jq`` must be a constant of the calling code, never data. ``body`` is
     sent on stdin (``--input -``). A failure raises runner.CommandError,
-    whose stderr holds gh's message.
+    whose stderr holds gh's message. With ``stderr_is_error``, output on
+    stderr is a failure even if gh exits 0 (a bash caller that captured
+    ``2>&1`` would have compared it as part of the answer).
     """
     validate.require(ENDPOINT, endpoint, "API endpoint")
     if method not in METHODS:
@@ -54,4 +58,7 @@ def api(
         argv += ["--input", "-"]
     if jq is not None:
         argv += ["--jq", jq]
-    return runner.run(runner.Zone.TRUSTED_HOST, argv, stdin=body, timeout=timeout).stdout
+    result = runner.run(runner.Zone.TRUSTED_HOST, argv, stdin=body, timeout=timeout)
+    if stderr_is_error and result.stderr:
+        raise runner.CommandError("gh", "output on stderr", result.returncode, result.stderr)
+    return result.stdout

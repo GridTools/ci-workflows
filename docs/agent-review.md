@@ -93,7 +93,7 @@ Optionally, a **test job** for the caller's own pull requests (see [Caller test 
 
 ### Inputs
 
-`workflow_call` has no `choice` type, so every value is validated in the `authorize` job by [`bin/authorize`](../agent-review/bin/authorize), fail-closed, with offline unit tests ([`tests/test-authorize.sh`](../agent-review/tests/test-authorize.sh)).
+`workflow_call` has no `choice` type, so every value is validated in the `authorize` job by [`bin/authorize`](../agent-review/bin/authorize) (Python, [`lib/agent_review/authorize.py`](../agent-review/lib/agent_review/authorize.py)), fail-closed, with offline unit tests ([`tests/test-authorize.sh`](../agent-review/tests/test-authorize.sh), [`tests/python/test_authorize.py`](../agent-review/tests/python/test_authorize.py)). Patterns match whole values with ASCII classes only, numbers are matched before they are converted, list entries are trimmed of ASCII whitespace only (not of Unicode spaces), a value that is not UTF-8 fails, and every value quoted in a notice or error is escaped, so it cannot start another workflow command.
 
 | Input | Default | Meaning and validation |
 | --- | --- | --- |
@@ -211,7 +211,7 @@ The `stub` harness makes no model call and posts a fixed review containing hosti
 
 ## Harness adapters
 
-A harness is a directory `agent-review/harnesses/<name>/`; the name must also be added to the harness allowlist in [`bin/authorize`](../agent-review/bin/authorize), as keyed (it calls a model; `wire` `openai-chat`) or keyless (`wire` `none`; both review jobs check that the two agree), and callers may add it to their `workflow_dispatch` choice. The contract is in [`harnesses/README.md`](../agent-review/harnesses/README.md):
+A harness is a directory `agent-review/harnesses/<name>/`; the name must also be added to the harness allowlist in [`lib/agent_review/authorize.py`](../agent-review/lib/agent_review/authorize.py) (`KEYED_HARNESSES` or `KEYLESS_HARNESSES`), as keyed (it calls a model; `wire` `openai-chat`) or keyless (`wire` `none`; both review jobs check that the two agree), and callers may add it to their `workflow_dispatch` choice. The contract is in [`harnesses/README.md`](../agent-review/harnesses/README.md):
 
 - `install.sh <prefix>` runs in `prepare` and installs an exact version, integrity-checked, into `<prefix>`, writing the version to `<prefix>/VERSION`, without executing any harness code. The prefix is unpacked to `/opt/agent-review/harness/<name>` and must run from there without network access.
 - `run.sh` runs inside the sandbox, from the PR checkout, with `PROMPT_FILE`, `REPO_DIR`, `OUT_DIR`, `CONTEXT_DIR`, `MODEL`, `HARNESS_PREFIX` and `PR_NUMBER` set, plus AWF's `AWF_API_PROXY_OPENAI_URL`. It checks the harness version, keeps its configuration in a scratch home under `$TMPDIR` (in the workspace), disables updates, telemetry and sharing, and writes `$OUT_DIR/review.md`. Exit codes: 0 review written, 2 no review, anything else a failure; it must return 2, not 0, when the harness exits 0 without a real answer.
