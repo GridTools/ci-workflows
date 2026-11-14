@@ -767,8 +767,8 @@ jobs:
           DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
           SKIPPED: ${{ needs.review.outputs.skipped || needs.review-keyless.outputs.skipped }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PATH: /usr/bin:/bin
         run: |
-          pc="${RUNNER_TEMP}/trusted/bin/publish-comment"
           review="${RUNNER_TEMP}/result/review.md"
           if [ "${SKIPPED}" = true ]; then
             echo "result=skipped" >> "$GITHUB_OUTPUT"
@@ -779,7 +779,8 @@ jobs:
             exit 0
           fi
           rc=0
-          bash "${pc}" render --harness "${HARNESS}" --version "${VERSION}" --model "${MODEL}" \
+          /usr/bin/python3 -I -S -B "${RUNNER_TEMP}/trusted/bin/publish-comment" render \
+            --harness "${HARNESS}" --version "${VERSION}" --model "${MODEL}" \
             --head-sha "${HEAD_SHA}" --run-url "${RUN_URL}" --review "${review}" > "${RUNNER_TEMP}/body.md" || rc=$?
           case "${rc}" in
             0) ;;
@@ -808,8 +809,9 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ needs.authorize.outputs.pr }}
           HARNESS: ${{ needs.authorize.outputs.harness }}
+          PATH: /usr/bin:/bin
         run: |
-          url=$(bash "${RUNNER_TEMP}/trusted/bin/publish-comment" post --repo "${REPO}" --pr "${PR}" \
+          url=$(/usr/bin/python3 -I -S -B "${RUNNER_TEMP}/trusted/bin/publish-comment" post --repo "${REPO}" --pr "${PR}" \
             --harness "${HARNESS}" --body-file "${RUNNER_TEMP}/body.md")
           echo "::notice::Posted the agent review: ${url}"
           { echo "result=posted"; echo "comment_url=${url}"; } >> "$GITHUB_OUTPUT"
@@ -826,7 +828,7 @@ jobs:
         run: |
           case "${RESULT}" in
             missing) reason="the agent produced no review (fetch outcome '${FETCH_OUTCOME}', review outcome '${OUTCOME}', exit code '${EXIT_CODE}')" ;;
-            invalid) reason="the review was rejected as invalid (not UTF-8, or empty)" ;;
+            invalid) reason="the review was rejected as invalid (not UTF-8, empty, or not a regular file within the size cap)" ;;
           esac
           echo "::warning title=Agent review failed::No review was posted: ${reason}. See the 'Fetch the pull request in the sandbox' and 'Run the review in the sandbox' logs."
           {
