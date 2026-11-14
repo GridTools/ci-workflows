@@ -47,6 +47,12 @@ def test_log_lines_prefix_every_line() -> None:
     assert out.getvalue() == b"awf| one\nawf| ::error::two\nawf| \nawf| three\n"
 
 
+def test_log_lines_drop_nul_before_breaking_markers() -> None:
+    out = io.BytesIO()
+    workflow.log_lines("x #\0#[warning]a\0b", "awf| ", stream=out)
+    assert out.getvalue().decode() == "awf| x #\u200b#[warning]ab\n"
+
+
 def test_log_lines_break_legacy_commands() -> None:
     out = io.BytesIO()
     workflow.log_lines("x ##[warning]fake\n##[add-mask]v ##[set-output name=a;]b", "awf| ", stream=out)

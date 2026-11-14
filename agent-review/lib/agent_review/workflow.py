@@ -7,8 +7,9 @@
   outputs. The multi-line (heredoc) form is not offered.
 - ``log_lines`` writes text that may be untrusted: every line gets a prefix
   that starts with neither whitespace nor ``:`` (the runner trims leading
-  whitespace, including non-breaking spaces, before matching ``::``), and
-  every ``##[`` is broken up with a zero-width space, because the runner's
+  whitespace, including non-breaking spaces, before matching ``::``), NUL
+  characters are dropped, and every ``##[`` is then broken up with a
+  zero-width space, because the runner's
   legacy parser finds ``##[command]`` anywhere in a line. It never uses
   ``::stop-commands::``, whose token would be printed to the live log first.
 
@@ -74,8 +75,11 @@ LEGACY_BROKEN = "#\u200b#["
 
 
 def neutralise(text: str) -> str:
-    """Breaks up every legacy command marker (``##[``) in ``text``."""
-    return text.replace(LEGACY_MARKER, LEGACY_BROKEN)
+    """Drops NUL and breaks up every legacy command marker (``##[``) in ``text``.
+
+    NUL first, so that '#\\0#[' cannot become a marker afterwards.
+    """
+    return text.replace("\0", "").replace(LEGACY_MARKER, LEGACY_BROKEN)
 
 
 def log_lines(text: str, prefix: str, *, stream: BinaryIO | None = None) -> None:

@@ -380,11 +380,11 @@ def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
 # --- Sandbox output ------------------------------------------------------------------
 
 # Every line of AWF's output goes through exactly this filter: carriage
-# returns dropped, '##[' (the runner's legacy command syntax, matched
+# returns and NUL bytes dropped, '##[' (the runner's legacy command syntax, matched
 # anywhere in a line) broken up with a zero-width space, a prefix so no line
 # starts with '::' (invariant 11).
-AWF_OUTPUT_FILTER = "| /usr/bin/sed -u -e 's/\\r//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e 's/^/awf| /'"
-DIAG_FILTER = "sed -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e \"s/^/${ADAPTER_NAME:-harness}| /\" >&2"
+AWF_OUTPUT_FILTER = "| /usr/bin/sed -u -e 's/\\r//g' -e 's/\\x00//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e 's/^/awf| /'"
+DIAG_FILTER = "sed -e 's/\\x00//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e \"s/^/${ADAPTER_NAME:-harness}| /\" >&2"
 
 
 def sandbox_output_problems(workflow: Mapping[str, Any], common_sh: str) -> list[str]:

@@ -467,7 +467,7 @@ def test_real_sandbox_output_filters_pass() -> None:
 
 @pytest.mark.parametrize(
     "old",
-    [" -e 's/##\\[/#\\xe2\\x80\\x8b#[/g'", " -e 's/^/awf| /'", " -e 's/\\r//g'"],
+    [" -e 's/##\\[/#\\xe2\\x80\\x8b#[/g'", " -e 's/^/awf| /'", " -e 's/\\r//g'", " -e 's/\\x00//g'"],
 )
 def test_awf_output_filter_is_required(old: str) -> None:
     workflow = copy.deepcopy(WORKFLOW)
@@ -477,18 +477,20 @@ def test_awf_output_filter_is_required(old: str) -> None:
 
 
 def test_diag_filter_is_required() -> None:
-    weakened = COMMON_SH.replace("-e 's/##\\[/#\\xe2\\x80\\x8b#[/g' ", "")
-    assert weakened != COMMON_SH
-    assert ws.sandbox_output_problems(WORKFLOW, weakened)
+    for rule in ("-e 's/##\\[/#\\xe2\\x80\\x8b#[/g' ", "-e 's/\\x00//g' "):
+        weakened = COMMON_SH.replace(rule, "")
+        assert weakened != COMMON_SH
+        assert ws.sandbox_output_problems(WORKFLOW, weakened)
 
 
 def test_diag_breaks_legacy_commands(tmp_path: pathlib.Path) -> None:
     script = tmp_path / "t.sh"
     script.write_text(
-        f'. "{ws.AR_DIR}/harnesses/common.sh"\nprintf "a ##[warning]x\\n::error::y\\n" | ADAPTER_NAME=t diag\n'
+        f'. "{ws.AR_DIR}/harnesses/common.sh"\n'
+        'printf "a ##[warning]x\\n::error::y\\nb #\\0#[error]z\\n" | ADAPTER_NAME=t diag\n'
     )
     result = subprocess.run(["/usr/bin/bash", str(script)], capture_output=True, timeout=30, check=True)
-    assert result.stderr == "t| a #\u200b#[warning]x\nt| ::error::y\n".encode()
+    assert result.stderr == "t| a #\u200b#[warning]x\nt| ::error::y\nt| b #\u200b#[error]z\n".encode()
 
 
 # --- The collect gate -------------------------------------------------------------
