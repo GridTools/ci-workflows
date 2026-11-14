@@ -131,7 +131,7 @@ def test_rules() -> None:
 
 def values(**changes: object) -> prompt.PromptValues:
     base: dict[str, object] = {
-        "project": "GT4Py",
+        "project": "Example",
         "repo": "example-org/example",
         "pr_number": "2983",
         "head_sha": "a" * 40,
@@ -152,7 +152,7 @@ def test_render_real_template() -> None:
     assert re.fullmatch("[0-9a-f]{24}", nonce)
     out = prompt.render(template, values(), nonce).decode()
     assert out.endswith("\n") and not out.endswith("\n\n")
-    assert "pull request to GT4Py." in out
+    assert "pull request to Example." in out
     assert f"<untrusted-pr-description-{nonce}>\nTitle: Fix {{{{HEAD_SHA}}}}\n\n{{{{PR_BODY}}}} {{{{NONCE}}}}\n" in out
     assert out.count("{{") == 3  # only in the PR text
     assert "1. `AGENTS.md`, if it exists." in out

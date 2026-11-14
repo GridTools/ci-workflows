@@ -201,9 +201,9 @@ def test_load_config_checks_rule_files_first(tmp_path: pathlib.Path) -> None:
         (["docs/style/"], "docs/style/naming.md", True),
         (["docs/style/"], "a/docs/style/b/c.md", True),
         (["docs/style/"], "docs/style.md", False),
-        (["next/*.md"], "src/gt4py/next/AGENTS.md", True),
+        (["sub/*.md"], "src/pkg/sub/AGENTS.md", True),
         # '*' does not cross '/' (bash's matching said it did: finding S4).
-        (["gt4py/*.md"], "src/gt4py/next/AGENTS.md", False),
+        (["pkg/*.md"], "src/pkg/sub/AGENTS.md", False),
         (["**/*.md"], "a/b/c.md", True),
         ([".github/copilot-instructions.md"], ".github/copilot-instructions.md", True),
         ([], "AGENTS.md", False),
@@ -318,10 +318,10 @@ def test_post_condition_file_left_at_the_pr_version(pr: PR) -> None:
 def test_post_condition_pattern_that_misses_the_file(pr: PR) -> None:
     # The S4 scenario: a pattern that does not match at that depth leaves
     # the PR's added file in place.
-    pr.make(BASE, {"src/gt4py/next/AGENTS.md": "PR\n"})
-    pr.reset(["CLAUDE.md", "gt4py/*.md"])
+    pr.make(BASE, {"src/pkg/sub/AGENTS.md": "PR\n"})
+    pr.reset(["CLAUDE.md", "pkg/*.md"])
     with pytest.raises(Fatal, match="is not in the base commit but is in the checkout: the reset missed it"):
-        pr.verify(["CODING_GUIDELINES.md"], ["src/gt4py/next/AGENTS.md"])
+        pr.verify(["CODING_GUIDELINES.md"], ["src/pkg/sub/AGENTS.md"])
 
 
 def test_post_condition_symlinked_parent(pr: PR) -> None:

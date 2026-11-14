@@ -54,14 +54,14 @@ def test_parse_args_errors(args: list[str], message: str) -> None:
 
 def write_params(tmp_path: pathlib.Path, **changes: object) -> str:
     params: dict[str, object] = {
-        "repo": "GridTools/gt4py",
+        "repo": "example-org/example",
         "pr": 2983,
         "head_sha": SHA_A,
         "base_sha": SHA_B,
         "harness": "stub",
         "model": "none",
         "harness_timeout_minutes": 5,
-        "project": "GT4Py",
+        "project": "Example",
     }
     params.update(changes)
     params = {k: v for k, v in params.items() if v is not ...}
@@ -72,13 +72,13 @@ def write_params(tmp_path: pathlib.Path, **changes: object) -> str:
 
 def test_load_params(tmp_path: pathlib.Path) -> None:
     params = run_review.load_params(write_params(tmp_path))
-    assert params == run_review.Params("GridTools/gt4py", "2983", SHA_A, SHA_B, "stub", "none", "5", "0", "GT4Py")
+    assert params == run_review.Params("example-org/example", "2983", SHA_A, SHA_B, "stub", "none", "5", "0", "Example")
     # The workflow passes strings.
     assert run_review.load_params(write_params(tmp_path, pr="12", harness_timeout_minutes="30")).pr_number == "12"
     # Defaults: the project is the repository name, the padding 0.
     defaulted = run_review.load_params(write_params(tmp_path, project=..., stub_padding_kib=None))
-    assert (defaulted.project, defaulted.stub_padding_kib) == ("gt4py", "0")
-    assert run_review.load_params(write_params(tmp_path, project="")).project == "gt4py"
+    assert (defaulted.project, defaulted.stub_padding_kib) == ("example", "0")
+    assert run_review.load_params(write_params(tmp_path, project="")).project == "example"
 
 
 @pytest.mark.parametrize(
