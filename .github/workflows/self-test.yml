@@ -109,6 +109,33 @@ jobs:
       - name: mypy
         run: '"${RUNNER_TEMP}/venv/bin/python" -m mypy'
 
+  # Temporary (D5, removed with tests/legacy/authorize.sh): the legacy bash
+  # 'authorize' and its Python port on the same generated inputs. Several
+  # minutes, so not in the 'python' job.
+  differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      AUTHORIZE_DIFFERENTIAL: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The runner's locale
+        run: |
+          locale
+          locale -a
+      - name: Install the test tools
+        run: |
+          /usr/bin/python3 -m venv "${RUNNER_TEMP}/venv"
+          "${RUNNER_TEMP}/venv/bin/pip" install --require-hashes --no-deps --only-binary :all: \
+            -r agent-review/tests/requirements.txt
+      - name: authorize, bash against Python
+        run: '"${RUNNER_TEMP}/venv/bin/python" -B -m pytest -ra agent-review/tests/python/test_authorize_differential.py'
+
   # The model-calling adapters' installers, as the 'prepare' job runs them:
   # pinned versions with integrity checks, no install scripts, no harness
   # code executed (the version check runs inside the sandbox).
