@@ -10,11 +10,11 @@ BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)
 # workflow_structure.py, which also checks the rest of the file).
 PYTHON_ENTRY_MARKER="# agent-review Python entry point: run only as '/usr/bin/python3 -I -S -B <root>/bin/<name>'."
 
-# Sets ENTRY_CMD to the production command line of a bin/ entry point, by
-# the file's own kind, as workflow_structure.py decides it: a Python entry
-# point runs as '/usr/bin/python3 -I -S -B <file>', a bash script with
-# /usr/bin/bash. Anything else is an error. Builtins and absolute paths
-# only: some tests put fake tools first on PATH.
+# Sets ENTRY_CMD to the production command line of a bin/ entry point,
+# '/usr/bin/python3 -I -S -B <file>'; a file without the Python entry-point
+# marker is an error (workflow_structure.py checks the rest of the
+# template). Builtins and absolute paths only: some tests put fake tools
+# first on PATH.
 entry_command() { # file
   local first=""
   IFS= read -r first <"$1" || [ -n "${first}" ] || {
@@ -22,10 +22,9 @@ entry_command() { # file
     return 1
   }
   case "${first}" in
-    '#!/usr/bin/env bash' | '#!/usr/bin/bash') ENTRY_CMD=(/usr/bin/bash "$1") ;;
     "${PYTHON_ENTRY_MARKER}") ENTRY_CMD=(/usr/bin/python3 -I -S -B "$1") ;;
     *)
-      echo "entry_command: '$1' is neither a bash script nor a Python entry point" >&2
+      echo "entry_command: '$1' is not a Python entry point" >&2
       return 1
       ;;
   esac

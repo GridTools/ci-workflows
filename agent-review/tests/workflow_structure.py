@@ -32,8 +32,9 @@ Python (docs/adr/0003-python-runtime.md):
   agent-review.yml; in the shell files under bin/ and harnesses/, only the
   Python call form, with the root in 'ar_root' set from the file's path;
   no Python shebang and no '.py' file outside lib/agent_review/ and tests/;
-- entry points: each file in bin/ is a bash script (by its shebang) or exactly the Python
-  template, and Python entry points are not executable (mode 100644);
+- entry points: each file in bin/ is exactly the Python template (all the
+  scripts are ported; a bash script there fails), with mode 100644 (not
+  executable);
 - the tracked tree under agent-review/: no symlink or submodule, no '.pth',
   '.pyc' or '__pycache__', no 'sitecustomize.py' or 'usercustomize.py';
   lib/ holds only agent_review/, and that only '.py' files;
@@ -72,8 +73,6 @@ KEYLESS_DIFFERENT = {"Check the inference key": "Check the harness wire"}
 
 # --- Entry points ----------------------------------------------------------
 
-# The absolute one is for scripts on the tainted host (collect-result was one).
-BASH_SHEBANGS = ("#!/usr/bin/env bash", "#!/usr/bin/bash")
 PYTHON_CALL = "/usr/bin/python3 -I -S -B"
 ENTRY_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}", re.ASCII)
 # Every Python entry point is exactly this text, apart from the module name.
@@ -107,10 +106,8 @@ def render_entry(name: str) -> str:
 
 
 def entry_kind(name: str, text: str) -> str | None:
-    """'bash', 'python', or None for a file that is neither (fail closed)."""
+    """'python' for exactly the template, else None (fail closed; bin/ holds no bash any more)."""
     first = text.split("\n", 1)[0]
-    if first in BASH_SHEBANGS:
-        return "bash"
     if first == PYTHON_MARKER and text == render_entry(name):
         return "python"
     return None
@@ -124,9 +121,7 @@ def entry_problems(entries: Mapping[str, tuple[str, str]], lib_sources: Mapping[
         if not ENTRY_NAME.fullmatch(name):
             problems.append(f"bin/{name}: invalid entry point name")
         if kind is None:
-            problems.append(
-                f"bin/{name}: neither a bash script ({' or '.join(BASH_SHEBANGS)}) nor the exact Python template"
-            )
+            problems.append(f"bin/{name}: not the exact Python entry-point template")
         if kind != "python":
             continue
         if mode != "100644":
@@ -632,8 +627,7 @@ def repository() -> dict[str, Any]:
     shell = {
         rel: read(rel)
         for rel in modes
-        if (rel.startswith("bin/") and kinds.get(rel[len("bin/") :]) == "bash")
-        or (rel.startswith("harnesses/") and (rel.endswith(".sh") or read(rel).startswith("#!")))
+        if rel.startswith("harnesses/") and (rel.endswith(".sh") or read(rel).startswith("#!"))
     }
     first_lines = {path: _first_line(path) for mode, path in index if mode != "120000"}
     return {

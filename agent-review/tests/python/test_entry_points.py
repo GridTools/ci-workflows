@@ -179,12 +179,14 @@ def test_launcher_runs_python_entry_points_with_the_production_command_line(tmp_
 
 
 @pytest.mark.parametrize("shebang", ["#!/usr/bin/env bash", "#!/usr/bin/bash"])
-def test_launcher_runs_bash_scripts_with_bash(shebang: str, tmp_path: pathlib.Path) -> None:
+def test_launcher_refuses_bash_scripts(shebang: str, tmp_path: pathlib.Path) -> None:
+    # bin/ holds only Python entry points now; a bash script is not run at all.
     script = tmp_path / "script"
-    script.write_text(f'{shebang}\necho "bash $# $1"\n')
-    result = launcher('entry_command "$1" && printf "%s\\n" "${ENTRY_CMD[@]}"', str(script))
-    assert result.stdout.decode().splitlines() == ["/usr/bin/bash", str(script)]
-    assert launcher('run_entry "$1" "a b"', str(script)).stdout == b"bash 1 a b\n"
+    script.write_text(f"{shebang}\necho ran\n")
+    result = launcher('run_entry "$1"', str(script))
+    assert result.returncode == 1
+    assert result.stdout == b""
+    assert b"not a Python entry point" in result.stderr
 
 
 def test_launcher_refuses_other_files(tmp_path: pathlib.Path) -> None:

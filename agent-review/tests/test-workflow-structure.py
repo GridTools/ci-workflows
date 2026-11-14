@@ -169,7 +169,7 @@ def main() -> int:
         "sandbox output: prefixed, no carriage return, no legacy '##[' (awf steps and diag)",
     )
     check_problems(collect_gate_problems(workflow), "'Collect the result' runs only after a successful teardown")
-    check_problems(entry_problems(repo["entries"], repo["lib"]), "bin/: bash scripts or the exact Python template")
+    check_problems(entry_problems(repo["entries"], repo["lib"]), "bin/: only the exact Python entry-point template")
     check_problems(tree_problems(repo["index"]), "tree: no symlink, .pth, .pyc, __pycache__, *customize.py")
     check_problems(shebang_problems(repo["first_lines"]), "no Python shebang outside lib/agent_review/ and tests/")
     check_problems(ast_problems(repo["python"]), "Python: allowlisted imports, no dynamic code, no shell")

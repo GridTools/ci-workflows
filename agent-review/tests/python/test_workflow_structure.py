@@ -297,15 +297,24 @@ def test_real_entry_points_pass() -> None:
     assert REPO["kinds"]["probe"] == "python"
 
 
+NOT_TEMPLATE = "not the exact Python entry-point template"
+
+
 @pytest.mark.parametrize(
     ("text", "mode", "expected"),
     [
         (ws.render_entry("probe"), "100755", "mode 100644"),
-        (ws.render_entry("probe") + "print('extra')\n", "100644", "neither"),
-        (ws.render_entry("probe").replace("sys.flags.safe_path", "True"), "100644", "neither"),
-        (ws.render_entry("other"), "100644", "neither"),
-        ("#!/usr/bin/python3 -ISB\nimport sys\n", "100755", "neither"),
-        ("", "100644", "neither"),
+        (ws.render_entry("probe") + "print('extra')\n", "100644", NOT_TEMPLATE),
+        (
+            ws.render_entry("probe").replace("sys.flags.safe_path", "True"),
+            "100644",
+            "not the exact Python entry-point template",
+        ),
+        (ws.render_entry("other"), "100644", NOT_TEMPLATE),
+        ("#!/usr/bin/python3 -ISB\nimport sys\n", "100755", NOT_TEMPLATE),
+        ("", "100644", NOT_TEMPLATE),
+        ("#!/usr/bin/env bash\necho hi\n", "100755", NOT_TEMPLATE),
+        ("#!/usr/bin/bash\necho hi\n", "100644", NOT_TEMPLATE),
     ],
 )
 def test_entry_problems(text: str, mode: str, expected: str) -> None:
