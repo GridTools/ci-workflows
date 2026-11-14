@@ -1,0 +1,7 @@
+# Inference endpoints the PR Agent key may be sent to: exact base URLs, one
+# per line, compared byte for byte with the caller's 'api_base' input. The
+# first entry is the default, used when 'api_base' is empty.
+#
+# Extend this list only by a reviewed release, flagged as breaking: the key
+# goes only to a host named here, in the commit the caller pinned.
+https://api.inference.cscs.ch/v1

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# The 'Resolve models' step of PR Agent: validates the model chain and the
+# limits, and derives the step timeout. Validated here because the PR Agent
+# step tolerates failure, which would hide a misconfiguration.
+#
+# Usage: resolve-models   (configuration in the environment, see below)
+#
+# Environment:
+#   IN_MODEL IN_FALLBACKS IN_BUDGET IN_OUTPUT IN_AI_TIMEOUT
+#              the caller's inputs; an empty limit means its default
+#   JOB_TIMEOUT  the PR Agent job's 'timeout-minutes'
+#   DOCS_URL     the caller's documentation (validated by 'authorize'), or ''
+#
+# Outputs: model, fallbacks (a JSON list), budget, output, ai_timeout,
+# step_timeout (minutes).
+
+set -euo pipefail
+
+readonly DOCS=https://github.com/GridTools/ci-workflows/blob/main/docs/pr-agent.md
+: "${GITHUB_OUTPUT:?}"
+for v in IN_MODEL IN_FALLBACKS IN_BUDGET IN_OUTPUT IN_AI_TIMEOUT JOB_TIMEOUT DOCS_URL; do
+  declare -g "${v}=${!v-}"
+done
+
+see="See ${DOCS}#inputs."
+[ -z "${DOCS_URL}" ] || see="See ${DOCS}#inputs and ${DOCS_URL}."
+fail() {
+  echo "::error::$1 ${see}"
+  exit 1
+}
+# Model ids become dynaconf values, which treat a leading '@' as a directive.
+model_id() { # input value
+  [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]] || fail "Invalid model id '${2:0:130}' in input $1."
+}
+# PR Agent reads a non-positive limit as "no limit". At most 9 digits keeps
+# the arithmetic below far from overflow.
+positive() { # input value
+  [[ "$2" =~ ^[1-9][0-9]{0,8}$ ]] || fail "Input $1 must be a positive integer without leading zeros, got '${2:0:20}'."
+}
+
+[[ "${JOB_TIMEOUT}" =~ ^[1-9][0-9]{0,2}$ ]] || fail "Invalid JOB_TIMEOUT '${JOB_TIMEOUT}'."
+[ -n "${IN_MODEL}" ] || fail "Input model is empty (no default)."
+model_id model "${IN_MODEL}"
+[ -n "${IN_FALLBACKS}" ] || fail "Input fallback_models is empty; use 'none' for no fallback."
+
+budget=${IN_BUDGET:-262144}
+output=${IN_OUTPUT:-100000}
+ai_timeout=${IN_AI_TIMEOUT:-720}
+positive token_budget "${budget}"
+positive max_output_tokens "${output}"
+positive ai_timeout "${ai_timeout}"
+[ "${ai_timeout}" -le $((JOB_TIMEOUT * 60)) ] || fail "Input ai_timeout ('${ai_timeout}' s) exceeds the ${JOB_TIMEOUT} min job limit."
+[ "${budget}" -gt "${output}" ] || fail "Input token_budget ('${budget}') must be greater than max_output_tokens ('${output}')."
+
+fallbacks=()
+if [ "${IN_FALLBACKS}" != none ]; then
+  IFS=, read -r -a entries <<<"${IN_FALLBACKS//$'\n'/,}"
+  for f in "${entries[@]}"; do
+    f=${f#"${f%%[![:space:]]*}"}
+    f=${f%"${f##*[![:space:]]}"}
+    [ -n "${f}" ] || continue
+    model_id fallback_models "${f}"
+    fallbacks+=("openai/${f}")
+  done
+  [ "${#fallbacks[@]}" -gt 0 ] || fail "Input fallback_models lists no model; use 'none' for no fallback."
+fi
+fallbacks_json=$(jq -cn '$ARGS.positional' --args "${fallbacks[@]}")
+
+# Every model may time out in turn, plus two minutes for fetching the diff and
+# publishing. A job timeout is a cancellation, which 'continue-on-error' does
+# not cover, so the chain must fit under the job limit with two minutes spare.
+chain=$((1 + ${#fallbacks[@]}))
+step=$(((chain * ai_timeout + 59) / 60 + 2))
+[ $((step + 2)) -le "${JOB_TIMEOUT}" ] || fail "${chain} models at '${ai_timeout}' s need ${step} min, leaving no margin under the ${JOB_TIMEOUT} min job limit. Lower ai_timeout or shorten fallback_models."
+
+{
+  echo "model=openai/${IN_MODEL}"
+  echo "fallbacks=${fallbacks_json}"
+  echo "budget=${budget}"
+  echo "output=${output}"
+  echo "ai_timeout=${ai_timeout}"
+  echo "step_timeout=${step}"
+} >>"${GITHUB_OUTPUT}"
+echo "::notice::Model 'openai/${IN_MODEL}', fallbacks ${fallbacks_json}; context window ${budget}, output reserve ${output}, ${ai_timeout} s per model, ${step} min for the chain."

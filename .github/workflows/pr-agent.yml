@@ -1,0 +1,281 @@
+name: PR Agent (reusable)
+
+# Advisory review of pull requests by PR Agent, which reads the diff through
+# the GitHub API with one model call; never a required status check. Called
+# by a small workflow in each adopting repository, pinned by commit SHA. See
+# docs/pr-agent.md.
+#
+# Jobs:
+#   authorize  no environment, no secret: the permission and command checks
+#              (pr-agent/bin/authorize) and the model chain
+#              (pr-agent/bin/resolve-models).
+#   pr-agent   the caller's environment and the key; runs the pinned image.
+#              No checkout and no script of ours: nothing from the PR runs.
+#   report     no secret: posts or removes the failure comment.
+#
+# The CALLER keeps: its triggers ('pull_request_target' and 'issue_comment'),
+# the calling job's 'permissions:' (the ceiling), 'concurrency', the explicit
+# secret mapping, the environment restricted to the default branch, the event
+# policy, '.pr_agent.toml' and its review rules.
+#
+# Compatibility: a new permission, a new required input or a new endpoint
+# breaks callers or widens what they agreed to; release it as breaking.
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Model id as the endpoint lists it, without 'openai/'
+        type: string
+        required: true
+      fallback_models:
+        description: Comma-separated model ids tried in order after 'model'; 'none' for no fallback
+        type: string
+        required: true
+      token_budget:
+        description: "Context window PR Agent assumes (empty: 262144)"
+        type: string
+        default: ""
+      max_output_tokens:
+        description: "Tokens reserved for the answer, reasoning included (empty: 100000)"
+        type: string
+        default: ""
+      ai_timeout:
+        description: "Seconds one model may take before the next one is tried (empty: 720)"
+        type: string
+        default: ""
+      api_base:
+        description: "Inference endpoint: exactly one of the URLs in pr-agent/api-bases.txt (empty: the first)"
+        type: string
+        default: https://api.inference.cscs.ch/v1
+      environment:
+        description: Environment of the 'pr-agent' job; holds the inference key and must be restricted to the default branch
+        type: string
+        default: pr-agent
+      docs_url:
+        description: The caller's PR Agent documentation, linked from errors and the failure comment
+        type: string
+        default: ""
+      dry_run:
+        description: Check permissions and inputs only; never runs PR Agent, needs no key
+        type: boolean
+        default: false
+      test_pr:
+        description: "Self-test of this repository only: 'owner/repo#number' of a public pull request; forces a dry run"
+        type: string
+        default: ""
+    secrets:
+      inference_api_key:
+        description: The dedicated inference key; map it explicitly from the caller's environment secret, never from a repository or organization secret
+        required: false
+    outputs:
+      result:
+        description: "success or failure (the PR Agent step), dry-run, skipped, incomplete (the PR Agent job did not finish), or '' on an error in 'authorize'"
+        value: ${{ jobs.pr-agent.outputs.outcome || jobs.authorize.outputs.result }}
+
+permissions: {}
+
+jobs:
+  authorize:
+    # Structural filters only, to avoid runs for unrelated events; the
+    # decision is made by 'pr-agent/bin/authorize'.
+    if: >-
+      github.event.sender.type != 'Bot'
+      && (
+        (
+          (github.event_name == 'pull_request_target' || github.event_name == 'pull_request')
+          && github.event.pull_request.draft == false
+          && github.event.pull_request.user.type != 'Bot'
+        )
+        || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request != null
+          && startsWith(github.event.comment.body, '/')
+        )
+        || inputs.test_pr != ''
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      allowed: ${{ steps.auth.outputs.allowed }}
+      result: ${{ steps.auth.outputs.result }}
+      dry_run: ${{ steps.auth.outputs.dry_run }}
+      pr: ${{ steps.auth.outputs.pr }}
+      api_base: ${{ steps.auth.outputs.api_base }}
+      docs_url: ${{ steps.auth.outputs.docs_url }}
+      trusted_repo: ${{ steps.auth.outputs.trusted_repo }}
+      trusted_sha: ${{ steps.auth.outputs.trusted_sha }}
+      model: ${{ steps.models.outputs.model }}
+      fallbacks: ${{ steps.models.outputs.fallbacks }}
+      budget: ${{ steps.models.outputs.budget }}
+      output: ${{ steps.models.outputs.output }}
+      ai_timeout: ${{ steps.models.outputs.ai_timeout }}
+      step_timeout: ${{ steps.models.outputs.step_timeout }}
+    steps:
+      # From this workflow's own commit, never the PR or the caller. The
+      # caller's token can read this repository because it is public.
+      - name: Fetch trusted files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ job.workflow_repository }}
+          SHA: ${{ job.workflow_sha }}
+          OWN_REPO: ${{ job.workflow_repository }}
+          OWN_SHA: ${{ job.workflow_sha }}
+        run: &fetch-trusted-run |
+          [[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::Invalid workflow repository '${REPO}'."; exit 1; }
+          [[ "${SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid workflow sha '${SHA}'."; exit 1; }
+          if [ "${REPO}" != "${OWN_REPO}" ] || [ "${SHA}" != "${OWN_SHA}" ]; then
+            echo "::error::Workflow commit changed between jobs: '${REPO}@${SHA}' vs '${OWN_REPO}@${OWN_SHA}'."
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/trusted"
+          gh api "repos/${REPO}/tarball/${SHA}" > "${RUNNER_TEMP}/trusted.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/trusted.tar.gz" -C "${RUNNER_TEMP}/trusted" \
+            --strip-components=2 --wildcards --no-wildcards-match-slash '*/pr-agent/*'
+          rm "${RUNNER_TEMP}/trusted.tar.gz"
+          [ -f "${RUNNER_TEMP}/trusted/bin/authorize" ] || { echo "::error::No pr-agent/bin/authorize in ${REPO}@${SHA}."; exit 1; }
+
+      # This job declares no environment, so 'secrets.inference_api_key' is
+      # non-empty here only if the caller maps a repository or organization
+      # secret: the script fails. The expression yields only 'true' or
+      # 'false', never the key.
+      - name: Authorize
+        id: auth
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_IS_PR: ${{ github.event.issue.pull_request != null }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          BODY: ${{ github.event.comment.body }}
+          IN_API_BASE: ${{ inputs.api_base }}
+          IN_ENVIRONMENT: ${{ inputs.environment }}
+          IN_DOCS_URL: ${{ inputs.docs_url }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+          IN_TEST_PR: ${{ inputs.test_pr }}
+          TRUSTED_REPO: ${{ job.workflow_repository }}
+          TRUSTED_SHA: ${{ job.workflow_sha }}
+          CALLER_WF_SHA: ${{ github.workflow_sha }}
+          HAS_SHARED_KEY: ${{ secrets.inference_api_key != '' }}
+        run: bash "${RUNNER_TEMP}/trusted/bin/authorize"
+
+      - name: Resolve models
+        id: models
+        if: steps.auth.outputs.allowed == 'true'
+        env:
+          IN_MODEL: ${{ inputs.model }}
+          IN_FALLBACKS: ${{ inputs.fallback_models }}
+          IN_BUDGET: ${{ inputs.token_budget }}
+          IN_OUTPUT: ${{ inputs.max_output_tokens }}
+          IN_AI_TIMEOUT: ${{ inputs.ai_timeout }}
+          # The 'pr-agent' job's 'timeout-minutes' (checked by the structure test).
+          JOB_TIMEOUT: "45"
+          DOCS_URL: ${{ steps.auth.outputs.docs_url }}
+        run: bash "${RUNNER_TEMP}/trusted/bin/resolve-models"
+
+  pr-agent:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true' && needs.authorize.outputs.dry_run == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # The caller's environment, holding the dedicated key and restricted to
+    # the default branch. Only this job declares it, so a refused command
+    # records no deployment. GitHub creates a missing environment unprotected.
+    environment: ${{ inputs.environment }}
+    # No 'contents: write': a prompt injection in a diff must not become a way
+    # to push. 'issues: write' is for the reaction acknowledging a command.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      outcome: ${{ steps.pragent.outcome }}
+    steps:
+      - name: Check the inference key
+        env:
+          HAS_KEY: ${{ secrets.inference_api_key != '' }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [ "${HAS_KEY}" != true ]; then
+            echo "::error::No inference key reached this job: map the secret 'inference_api_key' from the '${ENVIRONMENT}' environment's secret."
+            exit 1
+          fi
+
+      # Never add 'actions/checkout' or a script here: this job holds the key
+      # under 'pull_request_target'. PR Agent reads the diff through the API.
+      - name: Run PR Agent
+        id: pragent
+        continue-on-error: true
+        # 'fromJSON' because the runner ignores a timeout that is not a number.
+        timeout-minutes: ${{ fromJSON(needs.authorize.outputs.step_timeout) }}
+        # Tag '0.50.0-github_action', pinned because the image receives the key.
+        uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI.KEY: ${{ secrets.inference_api_key }}
+          OPENAI.API_BASE: ${{ needs.authorize.outputs.api_base }}
+          config.model: ${{ needs.authorize.outputs.model }}
+          config.fallback_models: ${{ needs.authorize.outputs.fallbacks }}
+          config.custom_model_max_tokens: ${{ needs.authorize.outputs.budget }}
+          config.max_model_tokens: ${{ needs.authorize.outputs.budget }}
+          config.max_output_tokens: ${{ needs.authorize.outputs.output }}
+          # Helps open-weight models follow the output schema.
+          config.duplicate_prompt_examples: "true"
+          # A timeout moves on to the next model, since the step limit allows
+          # one timeout per model. A rejected request (429, 5xx) is retried
+          # twice first; slow rejections can still use up the step limit.
+          config.ai_timeout: ${{ needs.authorize.outputs.ai_timeout }}
+          config.retry_same_model_on_timeout: "false"
+          config.num_retries: "2"
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+          # Model output must not write labels or the PR body. Set here, not
+          # only in '.pr_agent.toml', which PR Agent skips if fetching it fails.
+          pr_reviewer.enable_review_labels_effort: "false"
+          pr_reviewer.enable_review_labels_security: "false"
+          pr_description.publish_labels: "false"
+          pr_description.publish_description_as_comment: "true"
+          # PR Agent accepts this key only from the host, not '.pr_agent.toml'.
+          pr_reviewer.publish_error_details: "true"
+
+  report:
+    needs: [authorize, pr-agent]
+    # Also after a failed 'pr-agent' job (environment denial, image pull,
+    # missing key); bin/report-outcome decides.
+    if: always() && needs.authorize.outputs.result == 'incomplete'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Fetch trusted files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ needs.authorize.outputs.trusted_repo }}
+          SHA: ${{ needs.authorize.outputs.trusted_sha }}
+          OWN_REPO: ${{ job.workflow_repository }}
+          OWN_SHA: ${{ job.workflow_sha }}
+        run: *fetch-trusted-run
+
+      - name: Report the PR Agent outcome on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.authorize.outputs.pr }}
+          JOB_RESULT: ${{ needs.pr-agent.result }}
+          OUTCOME: ${{ needs.pr-agent.outputs.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DOCS_URL: ${{ needs.authorize.outputs.docs_url }}
+        run: bash "${RUNNER_TEMP}/trusted/bin/report-outcome"
