@@ -266,7 +266,11 @@ jobs:
           TRUSTED_SHA: ${{ job.workflow_sha }}
           CALLER_WF_SHA: ${{ github.workflow_sha }}
           HAS_SHARED_KEY: ${{ secrets.inference_api_key != '' }}
-        run: bash "${RUNNER_TEMP}/trusted/bin/authorize"
+          # 'gh' is found on PATH (docs/adr/0004-python-runtime.md): only the
+          # system directories, never the home directories the runner's
+          # default PATH searches first.
+          PATH: /usr/bin:/bin
+        run: /usr/bin/python3 -I -S -B "${RUNNER_TEMP}/trusted/bin/authorize"
 
   prepare:
     needs: authorize
@@ -524,8 +528,11 @@ jobs:
       # No key and no agent: only 'run-review' runs, and git on the PR with
       # hooks, filters and submodules disabled. Its output is prefixed (and
       # carriage returns dropped), so no line can start a workflow command
-      # ('::...::'); no '::stop-commands::', whose token would be printed to
-      # the live log first. 'sudo -E' passes the environment to AWF, which
+      # ('::...::'), NUL bytes are dropped and every '##[' is then broken up
+      # with a zero-width space, because the runner finds the legacy
+      # '##[command]' anywhere in a line;
+      # no '::stop-commands::', whose token would be printed to the live log
+      # first. 'sudo -E' passes the environment to AWF, which
       # forwards none of it to the sandbox except what it sets itself.
       - &fetch-pr
         name: Fetch the pull request in the sandbox
@@ -543,8 +550,8 @@ jobs:
             --proxy-logs-dir "${RUNNER_TEMP}/awf-fetch-logs" \
             --image-tag "${IMAGE_TAG}" \
             --container-workdir "${WS}" \
-            -- /opt/agent-review/bin/run-review --phase fetch "${WS}" 2>&1 \
-            | /usr/bin/sed -u -e 's/\r//g' -e 's/^/awf| /'
+            -- /usr/bin/python3 -I -S -B /opt/agent-review/bin/run-review --phase fetch "${WS}" 2>&1 \
+            | /usr/bin/sed -u -e 's/\r//g' -e 's/\x00//g' -e 's/##\[/#\xe2\x80\x8b#[/g' -e 's/^/awf| /'
           # The default shell has no pipefail: report awf's status, not sed's.
           exit "${PIPESTATUS[0]}"
 
@@ -582,8 +589,8 @@ jobs:
             --proxy-logs-dir "${RUNNER_TEMP}/awf-logs" \
             --image-tag "${IMAGE_TAG}" \
             --container-workdir "${WS}" \
-            -- /opt/agent-review/bin/run-review --phase review "${WS}" 2>&1 \
-            | /usr/bin/sed -u -e 's/\r//g' -e 's/^/awf| /'
+            -- /usr/bin/python3 -I -S -B /opt/agent-review/bin/run-review --phase review "${WS}" 2>&1 \
+            | /usr/bin/sed -u -e 's/\r//g' -e 's/\x00//g' -e 's/##\[/#\xe2\x80\x8b#[/g' -e 's/^/awf| /'
           rc=${PIPESTATUS[0]}
           # The sandbox could write only to the workspace; still, treat the
           # host as tainted from here on: shell builtins only.
@@ -622,7 +629,7 @@ jobs:
         shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
         env:
           PATH: /usr/bin:/bin
-        run: /usr/bin/bash /opt/agent-review/bin/collect-result "${WS}/out" "${RUNNER_TEMP}/result"
+        run: /usr/bin/python3 -I -S -B /opt/agent-review/bin/collect-result "${WS}/out" "${RUNNER_TEMP}/result"
 
       - &upload-result
         name: Upload the result
@@ -765,8 +772,8 @@ jobs:
           DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
           SKIPPED: ${{ needs.review.outputs.skipped || needs.review-keyless.outputs.skipped }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PATH: /usr/bin:/bin
         run: |
-          pc="${RUNNER_TEMP}/trusted/bin/publish-comment"
           review="${RUNNER_TEMP}/result/review.md"
           if [ "${SKIPPED}" = true ]; then
             echo "result=skipped" >> "$GITHUB_OUTPUT"
@@ -777,7 +784,8 @@ jobs:
             exit 0
           fi
           rc=0
-          bash "${pc}" render --harness "${HARNESS}" --version "${VERSION}" --model "${MODEL}" \
+          /usr/bin/python3 -I -S -B "${RUNNER_TEMP}/trusted/bin/publish-comment" render \
+            --harness "${HARNESS}" --version "${VERSION}" --model "${MODEL}" \
             --head-sha "${HEAD_SHA}" --run-url "${RUN_URL}" --review "${review}" > "${RUNNER_TEMP}/body.md" || rc=$?
           case "${rc}" in
             0) ;;
@@ -806,8 +814,9 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ needs.authorize.outputs.pr }}
           HARNESS: ${{ needs.authorize.outputs.harness }}
+          PATH: /usr/bin:/bin
         run: |
-          url=$(bash "${RUNNER_TEMP}/trusted/bin/publish-comment" post --repo "${REPO}" --pr "${PR}" \
+          url=$(/usr/bin/python3 -I -S -B "${RUNNER_TEMP}/trusted/bin/publish-comment" post --repo "${REPO}" --pr "${PR}" \
             --harness "${HARNESS}" --body-file "${RUNNER_TEMP}/body.md")
           echo "::notice::Posted the agent review: ${url}"
           { echo "result=posted"; echo "comment_url=${url}"; } >> "$GITHUB_OUTPUT"
@@ -824,7 +833,7 @@ jobs:
         run: |
           case "${RESULT}" in
             missing) reason="the agent produced no review (fetch outcome '${FETCH_OUTCOME}', review outcome '${OUTCOME}', exit code '${EXIT_CODE}')" ;;
-            invalid) reason="the review was rejected as invalid (not UTF-8, or empty)" ;;
+            invalid) reason="the review was rejected as invalid (not UTF-8, empty, or not a regular file within the size cap)" ;;
           esac
           echo "::warning title=Agent review failed::No review was posted: ${reason}. See the 'Fetch the pull request in the sandbox' and 'Run the review in the sandbox' logs."
           {

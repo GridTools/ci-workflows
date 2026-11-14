@@ -18,7 +18,7 @@ setup() { # [padding-kib [head-sha base-sha]]
   local head=${2:-${HEAD_SHA}} base=${3:-${BASE_SHA}}
   # The trusted root, as the review job lays it out under /opt/agent-review.
   mkdir -p root ws/in
-  cp -r "${AR_DIR}/bin" "${AR_DIR}/harnesses" "${AR_DIR}/prompt.md.tmpl" "${AR_DIR}/instruction-files.txt" root/
+  cp -r "${AR_DIR}/bin" "${AR_DIR}/lib" "${AR_DIR}/harnesses" "${AR_DIR}/prompt.md.tmpl" "${AR_DIR}/instruction-files.txt" root/
   bash root/harnesses/stub/install.sh root/harness/stub
   # Caller configuration, as the review job writes it.
   mkdir -p root/config
@@ -35,7 +35,7 @@ setup() { # [padding-kib [head-sha base-sha]]
 
 test_reviews_pr_and_resets_instruction_files() {
   setup 0
-  bash root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   local repo="${TMP}/ws/repo" ctx="${TMP}/ws/repo/.agent-review-context"
   assert "review written" test -s ws/out/review.md &&
     assert "meta ok" test "$(jq -r .status ws/out/meta.json)" = ok &&
@@ -55,7 +55,7 @@ test_reviews_pr_and_resets_instruction_files() {
 
 test_truncates_oversized_review() {
   setup 100
-  bash root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   assert "truncated flag" test "$(jq -r .truncated ws/out/meta.json)" = true &&
     assert "under 60000 bytes" test "$(stat -c %s ws/out/review.md)" -le 60000
 }
@@ -64,8 +64,8 @@ test_truncates_oversized_review_in_two_phases() {
   # The workflow runs the phases in separate sandbox runs (separate processes),
   # so everything the review phase uses must be defined outside the fetch phase.
   setup 100
-  bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
-  bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   assert "truncated flag" test "$(jq -r .truncated ws/out/meta.json)" = true &&
     assert "under 60000 bytes" test "$(stat -c %s ws/out/review.md)" -le 60000 &&
     assert "truncation note" grep -q 'Review truncated' ws/out/review.md
@@ -77,7 +77,7 @@ test_removes_instruction_files_added_by_the_pr() {
   local head=64c83aa07ab0e2c00b385faccb8b4ca57945829a base=b84a46734f164516a4c28c486e4e4b71dd2eb2d8
   local repo="${TMP}/ws/repo" ctx="${TMP}/ws/repo/.agent-review-context/pr-instruction-files" p
   setup 0 "${head}" "${base}"
-  bash root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   for p in .claude/settings.json .github/copilot-instructions.md .opencode/opencode.jsonc \
     AGENTS.md CLAUDE.md src/gt4py/next/AGENTS.md src/gt4py/next/CLAUDE.md; do
     assert "${p} removed" test ! -e "${repo}/${p}" &&
@@ -102,12 +102,15 @@ setup_followed() { # extra-pattern
 }
 
 test_post_condition_catches_a_pattern_that_misses_the_file() {
-  # Bash matching says 'gt4py/*.md' covers src/gt4py/next/AGENTS.md ('*'
-  # crosses '/'), git's ':(glob)' does not, so the reset keeps the PR's
-  # file: the post-condition must stop the run before the prompt exists.
+  # 'gt4py/*.md' does not cover src/gt4py/next/AGENTS.md: in git's
+  # ':(glob)' pathspecs '*' does not cross '/'. The coverage check asks
+  # git, like the reset, so the run fails closed before the fetch. (The
+  # bash version's check said "covered" and the post-condition caught the
+  # miss; tests/python/test_run_review.py runs the post-condition with the
+  # reset subverted.)
   setup_followed 'gt4py/*.md'
-  ! bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 &&
-    assert "names the file" grep -q "Followed file 'src/gt4py/next/AGENTS.md' is not in the base commit but is in the checkout" log &&
+  ! run_entry root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 &&
+    assert "names the file" grep -q "names 'src/gt4py/next/AGENTS.md', which no reset pattern covers" log &&
     assert "no prompt" test ! -e ws/prompt.md
 }
 
@@ -115,7 +118,7 @@ test_post_condition_passes_when_the_pattern_matches() {
   # Positive control: 'next/*.md' matches at that depth, so the PR's file is
   # removed (the base has none).
   setup_followed 'next/*.md'
-  bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   assert "file removed" test ! -e ws/repo/src/gt4py/next/AGENTS.md &&
     assert "PR version kept as data" test -s ws/repo/.agent-review-context/pr-instruction-files/src/gt4py/next/AGENTS.md.txt &&
     assert "checked" grep -q "1 rule file(s) and 1 file(s) named by the addendum are their base versions" log
@@ -126,7 +129,7 @@ test_rule_file_added_only_by_the_pr() {
   setup 0 "${REAL_HEAD}" "${REAL_BASE}"
   printf 'src/gt4py/next/AGENTS.md\n' >root/config/rule-files.txt
   : >root/config/prompt-addendum.md
-  bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   assert "file removed" test ! -e ws/repo/src/gt4py/next/AGENTS.md &&
     assert "checked" grep -q "1 rule file(s) and 0 file(s) named by the addendum are their base versions" log
 }
@@ -136,7 +139,7 @@ test_review_phase_runs_offline_after_fetch() {
   # read must be in the checkout already. 'protocol.allow=never' (and
   # GIT_ALLOW_PROTOCOL for the driver) makes any lazy fetch fail.
   setup 0
-  bash root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review --phase fetch "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   local repo="${TMP}/ws/repo" offline=(git -c protocol.allow=never -C "${TMP}/ws/repo")
   assert "no review after fetch" test ! -e ws/out/review.md &&
     assert "prompt rendered" test -s ws/prompt.md &&
@@ -145,7 +148,7 @@ test_review_phase_runs_offline_after_fetch() {
     assert "show base file offline" "${offline[@]}" show "${BASE_SHA}:AGENTS.md" >/dev/null &&
     assert "grep offline" "${offline[@]}" grep -q -e import -- '*.py' &&
     assert "blame offline" "${offline[@]}" blame -- AGENTS.md >/dev/null &&
-    GIT_ALLOW_PROTOCOL=none bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 ||
+    GIT_ALLOW_PROTOCOL=none run_entry root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 ||
     { cat log; return 1; }
   assert "review written offline" test -s ws/out/review.md &&
     assert "meta ok" test "$(jq -r .status ws/out/meta.json)" = ok
@@ -155,7 +158,7 @@ test_drops_text_before_the_first_heading() {
   setup 0
   # A stub variant that opens its answer with a note, as models do.
   sed -i 's/^{$/{ echo "Writing the final review now."; echo;/' root/harnesses/stub/run.sh
-  bash root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
+  run_entry root/bin/run-review "${TMP}/ws" >log 2>&1 || { cat log; return 1; }
   assert "starts with the summary" test "$(head -n 1 ws/out/review.md)" = "### Summary" &&
     assert "note dropped" test "$(grep -c 'Writing the final review' ws/out/review.md)" -eq 0 &&
     assert "no leftover" test ! -e ws/out/review.body
@@ -163,7 +166,7 @@ test_drops_text_before_the_first_heading() {
 
 test_review_phase_needs_the_fetch_phase() {
   setup 0
-  ! bash root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
+  ! run_entry root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
     assert "explains why" grep -q "run the fetch phase first" log
 }
 

@@ -52,7 +52,7 @@ setup_prt() { # action
   [ "$1" != labeled ] || export EVENT_LABEL=agent-review
 }
 
-run() { bash "${AR_DIR}/bin/authorize" >log 2>&1; }
+run() { run_entry "${AR_DIR}/bin/authorize" >log 2>&1; }
 out() { sed -n "s/^$1=//p" "${GITHUB_OUTPUT}" | tail -n 1; }
 allowed() { run || { cat log; return 1; }; assert "allowed" test "$(out allowed)" = true; }
 denied() { # expected log text: exit 1, allowed=false

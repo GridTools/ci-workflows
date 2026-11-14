@@ -13,7 +13,8 @@ the pull request or the calling repository.
 | `README.md`  | Pinned version, how to upgrade it, the paths it reads as instructions or configuration (add them to `../instruction-files.txt`), and any outbound calls it tries to make.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 The harness name must also be added to the harness allowlist in
-`agent-review/bin/authorize`, as keyed (`wire` `openai-chat`: it runs in the
+`agent-review/lib/agent_review/authorize.py` (`KEYED_HARNESSES` or
+`KEYLESS_HARNESSES`), as keyed (`wire` `openai-chat`: it runs in the
 `review` job, with the caller's environment and key) or keyless (`wire`
 `none`: the `review-keyless` job); both jobs check that the `wire` agrees.
 Callers that offer it add it to their `workflow_dispatch` choice.
