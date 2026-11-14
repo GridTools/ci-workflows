@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from agent_review import collect_result, files
+from agent_review import collect_result
 
 AR_DIR = pathlib.Path(__file__).resolve().parents[2]
 ENTRY = AR_DIR / "bin" / "collect-result"
@@ -135,7 +135,7 @@ def test_parent_swapped_for_a_symlink_during_the_walk(
     """Swapping a parent after it was opened changes nothing either."""
     (ws / "elsewhere" / "out").mkdir(parents=True)
     (ws / "elsewhere" / "out" / "review.md").write_bytes(b"secret\n")
-    real_open_directory = files.open_directory
+    real_open_directory = collect_result.open_path_directory
 
     def open_then_swap(path: str, *, dir_fd: int | None = None) -> int:
         fd = real_open_directory(path, dir_fd=dir_fd)
@@ -144,7 +144,7 @@ def test_parent_swapped_for_a_symlink_during_the_walk(
             (ws / "ws").symlink_to(ws / "elsewhere")
         return fd
 
-    monkeypatch.setattr(files, "open_directory", open_then_swap)
+    monkeypatch.setattr(collect_result, "open_path_directory", open_then_swap)
     rc, _ = collect(capsys, ws)
     assert rc == 0
     assert dest_files(ws) == {"review.md": REVIEW, "meta.json": META}
@@ -208,6 +208,57 @@ def test_file_growing_past_the_cap_while_read(
     assert rc == 0
     assert warning("'review.md' grew over the 65536-byte limit while reading; skipped.") in out
     assert dest_files(ws) == {"meta.json": META}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
+@pytest.mark.parametrize("directory", ["ws", "ws/out"])
+def test_search_only_directories(directory: str, ws: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Mode 0311 (search, no read): bash's path lookup worked, so must this."""
+    (ws / directory).chmod(0o311)
+    try:
+        rc, out = collect(capsys, ws)
+    finally:
+        (ws / directory).chmod(0o755)
+    assert rc == 0
+    assert out == f"Collected 'review.md' ({len(REVIEW)} bytes).\nCollected 'meta.json' ({len(META)} bytes).\n"
+    assert dest_files(ws) == {"review.md": REVIEW, "meta.json": META}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
+@pytest.mark.parametrize("mode", [0o444, 0o000])
+def test_out_dir_without_search_permission(mode: int, ws: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Each file is refused on its own (bash said 'missing or not a regular file')."""
+    (ws / "ws" / "out").chmod(mode)
+    try:
+        rc, out = collect(capsys, ws)
+    finally:
+        (ws / "ws" / "out").chmod(0o755)
+    assert rc == 0
+    assert out == (
+        warning("'review.md' could not be read (Permission denied); skipped.")
+        + warning("'meta.json' could not be read (Permission denied); skipped.")
+    )
+    assert dest_files(ws) == {}
+
+
+def test_lstat_check_keeps_a_fifo_from_being_opened(
+    ws: pathlib.Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (ws / "ws" / "out" / "review.md").unlink()
+    os.mkfifo(ws / "ws" / "out" / "review.md")
+    opened: list[object] = []
+    real_open = os.open
+
+    def recording_open(path: Any, *args: Any, **kwargs: Any) -> int:
+        opened.append(path)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    rc, out = collect(capsys, ws)
+    assert rc == 0
+    assert out.startswith(warning("'review.md' is missing or not a regular file; skipped."))
+    assert "review.md" not in opened
+    assert "meta.json" in opened  # the recording works
 
 
 def test_size_limit(ws: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -313,6 +364,15 @@ def test_dest_write_error_fails(ws: pathlib.Path, capsys: pytest.CaptureFixture[
     assert rc == 1
     assert out == ""
     assert err.startswith(f"collect-result: cannot write 'review.md' to '{ws / 'dest'}': ")
+
+
+def test_failed_rename_leaves_no_tmp(ws: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (ws / "dest" / "review.md").mkdir(parents=True)
+    rc, _, err = run(capsys, str(ws / "ws" / "out"), str(ws / "dest"))
+    assert rc == 1
+    assert err.startswith("collect-result: cannot write 'review.md'")
+    assert sorted(p.name for p in (ws / "dest").iterdir()) == ["review.md"]
+    assert (ws / "dest" / "review.md").is_dir()
 
 
 def test_warning_data_is_escaped(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -13,7 +13,9 @@ every open is relative to a directory descriptor, with ``O_NOFOLLOW``:
   ``realpath``). It is opened one component at a time from ``/``, each a
   directory and none a symlink, and is then used only through that
   descriptor: swapping it or a parent for a symlink afterwards changes
-  nothing.
+  nothing. The walk uses ``O_PATH`` descriptors, which need only search
+  permission, as bash's path lookup did (a search-only ``0311`` workspace
+  still works).
 - Only ``review.md`` and ``meta.json`` are copied, each only if it is a
   regular file with a single link, at most ``MAX_BYTES``. The type is
   checked with ``lstat`` first, so a FIFO or a device found there is not
@@ -21,12 +23,21 @@ every open is relative to a directory descriptor, with ``O_NOFOLLOW``:
   is opened non-blocking and checked again with ``fstat`` on the descriptor
   (``files.read_bytes``), which also caps the bytes read: a file that grows
   while it is read is refused.
+- What this does not close: a process that is still running could
+  hard-link a host file (of at most ``MAX_BYTES``) in as ``review.md`` and
+  remove the extra link between the open and the ``fstat``, so that
+  ``st_nlink`` reads 1. No link-count check can prevent that; the
+  single-link check relies on no sandbox process being alive, which the
+  workflow's ``Stop the sandbox`` step guarantees (``Collect the result``
+  runs only if it succeeded). The path and type races are closed
+  regardless.
 - The content is copied as bytes; the ``publish`` job validates it again
   and never trusts this copy.
 - ``<dest-dir>`` (under ``$RUNNER_TEMP``, outside the sandbox's reach) is
   created if needed and must not be a symlink itself. Each file is read
   completely before anything is written, then written to a new
-  ``<name>.tmp`` (``O_EXCL``, no symlink followed) and renamed into place.
+  ``<name>.tmp`` (``O_EXCL``, no symlink followed) and renamed into place;
+  the temporary file is removed if the rename fails.
 
 Everything else the agent wrote is ignored. A missing or refused file is a
 ``::warning`` and exit 0; a wrong argument count, or a destination that
@@ -45,6 +56,11 @@ MAX_BYTES = 65536
 EXPECTED = ("review.md", "meta.json")
 TITLE = "Agent review result"
 USAGE = "Usage: collect-result <out-dir> <dest-dir>\n"
+
+# A directory used only as ``dir_fd`` and for path lookup: needs search
+# permission only. With O_DIRECTORY | O_NOFOLLOW a symlink fails (ENOTDIR).
+# Not files.open_directory: an O_PATH descriptor cannot list the directory.
+_PATH_DIR_FLAGS = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 # Open errors that mean "not a regular file we may read": absent, a symlink
 # (O_NOFOLLOW), a socket.
@@ -65,8 +81,13 @@ def _say(line: str) -> None:
     sys.stdout.buffer.flush()
 
 
+def open_path_directory(name: str, *, dir_fd: int | None = None) -> int:
+    """An ``O_PATH`` descriptor of the directory ``name``, which must not be a symlink."""
+    return os.open(name, _PATH_DIR_FLAGS, dir_fd=dir_fd)
+
+
 def open_source(src: str) -> int | None:
-    """A descriptor of the directory ``src``, or None.
+    """An ``O_PATH`` descriptor of the directory ``src``, or None.
 
     None if ``src`` is not absolute and canonical, or if it or any parent
     is missing, not a directory, or a symlink.
@@ -77,12 +98,12 @@ def open_source(src: str) -> int | None:
     if any(part in ("", ".", "..") for part in parts):
         return None
     try:
-        fd = files.open_directory("/")
+        fd = open_path_directory("/")
     except OSError:
         return None
     try:
         for part in parts:
-            child = files.open_directory(part, dir_fd=fd)
+            child = open_path_directory(part, dir_fd=fd)
             os.close(fd)
             fd = child
     except OSError:
@@ -129,7 +150,12 @@ def write_result(name: str, data: bytes, dest_fd: int) -> None:
     with contextlib.suppress(FileNotFoundError):
         os.unlink(tmp, dir_fd=dest_fd)
     files.write_new(tmp, data, dir_fd=dest_fd)
-    os.rename(tmp, name, src_dir_fd=dest_fd, dst_dir_fd=dest_fd)
+    try:
+        os.rename(tmp, name, src_dir_fd=dest_fd, dst_dir_fd=dest_fd)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp, dir_fd=dest_fd)
+        raise
 
 
 def collect(src: str, dest: str) -> int:
