@@ -155,6 +155,31 @@ def test_other_call_forms_fail(call: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("old", "call"),
+    [
+        # The call must start a command ('bounded'): 'x' or a closing quote before it.
+        (CALLS["authorize"], f'x{PY}{TRUSTED}authorize"'),
+        (CALLS["authorize"], f'"${{HOME}}"{PY}{TRUSTED}authorize"'),
+        # Only a separator may follow the name (PYTHON_AFTER).
+        (CALLS["authorize"], f'{PY}{TRUSTED}authorize/../../x"'),
+        (CALLS["authorize"], f'{PY}{TRUSTED}authorize"x'),
+        (CALLS["collect-result"], f"{PY}{OPT}collect-result/x"),
+        (CALLS["collect-result"], f"{PY}{OPT}collect-result;x"),
+        # An existence test must be complete ('" ]' after the name).
+        (CALLS["authorize"], f'[ -f {TRUSTED}authorize"'),
+        (CALLS["authorize"], f'[ -f {TRUSTED}authorize"x'),
+        (CALLS["authorize"], f'[ -f {TRUSTED}authorize";'),
+    ],
+)
+def test_each_call_site_check_alone(old: str, call: str) -> None:
+    """Each case fails in call_site_problems itself, not only through the 'python' word rule."""
+    workflow = fixture()
+    assert edit_runs(workflow, old, call)
+    found = ws.call_site_problems(workflow, kinds())
+    assert found and all("is Python; call it exactly as" in p for p in found), found
+
+
+@pytest.mark.parametrize(
     "script",
     ["python3 -c 'print(1)'", "/usr/bin/python3 -m pip install x", "pip install pytest", "pipx run x", "python -V"],
 )
