@@ -2,7 +2,7 @@
 
 Commands are argument lists, never shell strings. How the program is found
 and which environment it gets depend on the trust zone the caller runs in
-(docs/adr/0003-python-runtime.md):
+(docs/adr/0004-python-runtime.md):
 
 ``TRUSTED_HOST``
     ``authorize`` and ``publish-comment post``: they run before any untrusted

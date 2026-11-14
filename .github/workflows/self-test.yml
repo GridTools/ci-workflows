@@ -83,7 +83,7 @@ jobs:
       - name: Workflow structure
         run: python3 agent-review/tests/test-workflow-structure.py
 
-  # The agent review's Python code (docs/adr/0003-python-runtime.md): unit
+  # The agent review's Python code (docs/adr/0004-python-runtime.md): unit
   # tests, the entry points under the production command line in a hostile
   # environment, the structure checks on crafted inputs, and mypy. pytest and
   # mypy are test-only tools from a hash-pinned requirements file, in a

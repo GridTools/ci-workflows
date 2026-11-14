@@ -159,7 +159,7 @@ def main() -> int:
 
     repo = repository()
     kinds = repo["kinds"]
-    print("agent-review/ (Python runtime rules, docs/adr/0003-python-runtime.md)")
+    print("agent-review/ (Python runtime rules, docs/adr/0004-python-runtime.md)")
     print("  entry points: " + ", ".join(f"{name} ({kind})" for name, kind in sorted(kinds.items())))
     check_problems(call_site_problems(workflow, kinds), "call sites: roots per job and step, call form per file")
     check_problems(python_word_problems(workflow, kinds), "agent-review.yml: no other Python, no pip, no setup-python")

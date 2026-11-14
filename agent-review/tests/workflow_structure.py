@@ -21,7 +21,7 @@ does):
   that condition as one term. collect-result's single-link check relies on no sandbox
   process being alive.
 
-Python (docs/adr/0003-python-runtime.md):
+Python (docs/adr/0004-python-runtime.md):
 
 - call sites: every reference to '<root>/bin/<name>' uses the root allowed
   for its job and step, names an entry point, and is exactly

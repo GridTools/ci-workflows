@@ -2,7 +2,7 @@
 
 The black-box cases are in tests/test-authorize.sh (unchanged from the bash
 version); these test each piece, with the bash traps of
-docs/adr/0003-python-runtime.md, and the entry point in a hostile
+docs/adr/0004-python-runtime.md, and the entry point in a hostile
 environment.
 """
 

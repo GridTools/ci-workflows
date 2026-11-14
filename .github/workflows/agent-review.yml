@@ -266,7 +266,7 @@ jobs:
           TRUSTED_SHA: ${{ job.workflow_sha }}
           CALLER_WF_SHA: ${{ github.workflow_sha }}
           HAS_SHARED_KEY: ${{ secrets.inference_api_key != '' }}
-          # 'gh' is found on PATH (docs/adr/0003-python-runtime.md): only the
+          # 'gh' is found on PATH (docs/adr/0004-python-runtime.md): only the
           # system directories, never the home directories the runner's
           # default PATH searches first.
           PATH: /usr/bin:/bin

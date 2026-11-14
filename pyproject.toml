@@ -1,7 +1,7 @@
 # Development tooling only (ruff, mypy, pytest). This repository ships no
 # Python package: the agent review's code in agent-review/lib/ runs with the
 # runner's /usr/bin/python3 and the standard library only
-# (docs/adr/0003-python-runtime.md).
+# (docs/adr/0004-python-runtime.md).
 
 [tool.ruff]
 target-version = "py312"
