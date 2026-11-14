@@ -350,3 +350,69 @@ def test_coverage_scratch_is_removed(tmp_path: pathlib.Path) -> None:
 
 def test_messages_are_one_line() -> None:
     assert run_review.one_line("a\nb\r\nc") == "a\\nb\\r\\nc"
+
+
+PLANT = (
+    'printf \'{"status": "ok", "harness": "forged"}\' > "${OUT_DIR}/../out/meta.json"\n'
+    'echo "### Forged" > "${OUT_DIR}/../out/review.md"\n'
+    'echo extra > "${OUT_DIR}/../out/extra"\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("tail", "code", "names"),
+    [
+        ('echo "### Summary" > "${OUT_DIR}/review.md"', 0, ["meta.json", "review.md"]),
+        ("exit 2", 2, ["meta.json"]),
+    ],
+)
+def test_out_holds_only_run_reviews_files(
+    tmp_path: pathlib.Path, upstream: Upstream, tail: str, code: int, names: list[str]
+) -> None:
+    """The harness can write into out/; it is recreated after the harness exits."""
+    _, base_sha, head_sha = upstream.make(FORK, {}, {})
+    root = make_root(tmp_path / "root")
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    assert run_entry(root, ["--phase", "fetch", str(ws)], env=upstream.env()).returncode == 0
+    set_adapter(root, PLANT + tail + "\n")
+    result = run_entry(root, ["--phase", "review", str(ws)])
+    assert result.returncode == code, result.stdout.decode()
+    assert sorted(p.name for p in (ws / "out").iterdir()) == names
+    assert json.loads((ws / "out" / "meta.json").read_text())["harness"] == "stub"
+    if code == 0:
+        assert (ws / "out" / "review.md").read_text() == "### Summary\n"
+
+
+def test_deep_history_deepens_the_fetch(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    """The merge base lies beyond the first fetch's depth (50), so the fetch deepens."""
+    fork_sha, base_sha, head_sha = upstream.make(FORK, {}, {"AGENTS.md": "PR\n"}, depth=60)
+    root = make_root(tmp_path / "root", rules="AGENTS.md\n")
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    result = run_entry(root, ["--phase", "fetch", str(ws)], env=upstream.env())
+    log = result.stdout.decode()
+    assert result.returncode == 0, log
+    assert f"(merge base {fork_sha})." in log
+    assert f"`{fork_sha}`" in (ws / "prompt.md").read_text()
+    assert (ws / "repo" / "AGENTS.md").read_text() == "base rules\n"
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        {".agent-review-context": "-> /etc"},
+        {".agent-review-context/diff.patch": "PR diff\n", ".agent-review-context/AGENTS.md": "PR\n"},
+    ],
+)
+def test_pr_with_its_own_context_directory(tmp_path: pathlib.Path, upstream: Upstream, head: dict[str, str]) -> None:
+    _, base_sha, head_sha = upstream.make(FORK, {}, head)
+    root = make_root(tmp_path / "root")
+    ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
+    result = run_entry(root, ["--phase", "fetch", str(ws)], env=upstream.env())
+    assert result.returncode == 0, result.stdout.decode()
+    context = ws / "repo" / ".agent-review-context"
+    assert context.is_dir() and not context.is_symlink()
+    assert sorted(p.name for p in context.iterdir()) == ["changed-files.txt", "diff.patch", "pr-instruction-files"]
+    # run-review's own files, not the PR's (which appear in them as changes).
+    assert (context / "diff.patch").read_bytes().startswith(b"diff --git a/.agent-review-context")
+    assert (context / "changed-files.txt").read_text().startswith("A\t.agent-review-context")
+    assert "/.agent-review-context/" in (ws / "repo" / ".git" / "info" / "exclude").read_text()
