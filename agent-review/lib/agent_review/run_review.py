@@ -58,7 +58,6 @@ PHASES = ("fetch", "review", "all")
 REVIEW_MAX_BYTES = 60000
 TRUNCATION_NOTE = b"\n\n_[Review truncated: it exceeded %d bytes.]_\n" % REVIEW_MAX_BYTES
 PARAMS_MAX_BYTES = 1 << 20
-TEMPLATE_MAX_BYTES = 1 << 20
 EXIT_NO_REVIEW = 2
 # A three-dot diff needs the merge base, which a shallow fetch may lack.
 FETCH_DEPTH = 50
@@ -258,7 +257,6 @@ class Run:
 
         # --- Render the prompt ---
         title, body = prompt.read_pr(os.path.join(self.in_dir, "pr.json"))
-        template = reset.read_config_file(os.path.join(self.root, "prompt.md.tmpl"), TEMPLATE_MAX_BYTES)
         values = prompt.PromptValues(
             project=p.project,
             repo=p.repo,
@@ -271,7 +269,7 @@ class Run:
             title=title,
             body=body,
         )
-        files.write_new(self.prompt_file, prompt.render(template, values, prompt.new_nonce()))
+        files.write_new(self.prompt_file, prompt.render(self.config.template, values, prompt.new_nonce()))
         say(f"run-review: fetched {p.repo}#{p.pr_number} at {p.head_sha} (merge base {merge_base}).")
 
     def _merge_base(self, git: Git) -> str:

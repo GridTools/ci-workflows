@@ -42,6 +42,7 @@ from agent_review.sandbox_git import Git
 # Caps on the trusted configuration files (the bash version read them whole).
 LIST_MAX_BYTES = 1 << 20
 ADDENDUM_MAX_BYTES = 1 << 20
+TEMPLATE_MAX_BYTES = 1 << 20
 # bash's [[:space:]] in the C locale.
 ASCII_SPACE = b" \t\n\v\f\r"
 # grep -oE '`[^`[:space:]]+\.(md|mdc|txt|toml|ya?ml|json|jsonc)`', on bytes.
@@ -106,8 +107,9 @@ class Config:
 
     rule_files: tuple[str, ...]
     reset_patterns: tuple[str, ...]
-    addendum: bytes  # empty when not configured
+    addendum: bytes  # empty when not configured; valid UTF-8
     addendum_named: tuple[str, ...]  # sorted bytewise, unique
+    template: bytes = b""  # the prompt template; valid UTF-8
 
 
 def load_config(root: str) -> Config:
@@ -130,14 +132,19 @@ def load_config(root: str) -> Config:
     addendum_path = os.path.join(config_dir, "prompt-addendum.md")
     if os.path.isfile(addendum_path) and os.path.getsize(addendum_path) > 0:
         addendum = read_config_file(addendum_path, ADDENDUM_MAX_BYTES)
-        # The addendum is substituted into the prompt before the untrusted PR
-        # title and body; a placeholder in it would be expanded with them,
-        # outside their delimiters.
-        if b"{{" in addendum:
+        # Strict UTF-8 first, and the check on the decoded text: invalid
+        # bytes between two braces ('{\xff{') would otherwise pass the check
+        # and be dropped when the addendum is clipped into the prompt,
+        # forming a placeholder there.
+        text = _decode(addendum, addendum_path)
+        if "{{" in text:
             raise Fatal("The prompt addendum contains '{{'; placeholders are not allowed there.")
         found = sorted({m.group()[1:-1] for m in NAMED_FILE.finditer(addendum)})
         named = [_decode(n, addendum_path) for n in found]
-    return Config(tuple(rule_files), tuple(patterns), addendum, tuple(named))
+    template_path = os.path.join(root, "prompt.md.tmpl")
+    template = read_config_file(template_path, TEMPLATE_MAX_BYTES)
+    _decode(template, template_path)
+    return Config(tuple(rule_files), tuple(patterns), addendum, tuple(named), template)
 
 
 class Coverage:

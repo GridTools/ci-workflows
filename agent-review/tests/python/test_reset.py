@@ -147,7 +147,12 @@ def test_path_checks(path: str, tree: bool, plain: bool) -> None:
 
 
 def make_root(
-    tmp: pathlib.Path, rules: str = "", extra: str = "", addendum: bytes = b"", central: str = "AGENTS.md\n"
+    tmp: pathlib.Path,
+    rules: str = "",
+    extra: str = "",
+    addendum: bytes = b"",
+    central: str = "AGENTS.md\n",
+    template: bytes = b"# {{REPO}}\n",
 ) -> str:
     root = tmp / "root"
     (root / "config").mkdir(parents=True)
@@ -155,6 +160,7 @@ def make_root(
     (root / "config" / "rule-files.txt").write_text(rules)
     (root / "config" / "extra-instruction-files.txt").write_text(extra)
     (root / "config" / "prompt-addendum.md").write_bytes(addendum)
+    (root / "prompt.md.tmpl").write_bytes(template)
     return str(root)
 
 
@@ -408,3 +414,18 @@ def test_container_specs() -> None:
         ":(glob,icase)**/a",
         ":(glob,icase)**/a/b",
     ]
+
+
+@pytest.mark.parametrize("addendum", [b"{\xff{PR_BODY}}", b"notes \xc3"])
+def test_load_config_rejects_an_addendum_that_is_not_utf8(tmp_path: pathlib.Path, addendum: bytes) -> None:
+    """'{\\xff{PR_BODY}}' passed a byte check, then clipping dropped the byte and formed a placeholder."""
+    with pytest.raises(Fatal, match=r"prompt-addendum\.md' is not valid UTF-8\."):
+        reset.load_config(make_root(tmp_path, addendum=addendum))
+
+
+def test_load_config_reads_the_template(tmp_path: pathlib.Path) -> None:
+    assert reset.load_config(make_root(tmp_path)).template == b"# {{REPO}}\n"
+    with pytest.raises(Fatal, match=r"prompt\.md\.tmpl' is not valid UTF-8\."):
+        reset.load_config(make_root(tmp_path / "2", template=b"\xff"))
+    with pytest.raises(Fatal, match="Cannot read"):
+        reset.load_config(make_root(tmp_path / "3", template=b"x") + "/missing")
