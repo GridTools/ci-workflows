@@ -70,6 +70,8 @@ def test_failure(fake_gh: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None
         "repos/o/r pulls",
         "repos/o/r\n",
         "repos/é",
+        "[::1]/repos",
+        "repos/o/r?q=[x]",
         "",
     ],
 )
@@ -77,6 +79,12 @@ def test_endpoint_validation(fake_gh: pathlib.Path, endpoint: str) -> None:
     with pytest.raises(ValueError, match="API endpoint"):
         gh.api(endpoint)
     assert not (fake_gh / "args").exists()
+
+
+def test_bot_login_in_the_path(fake_gh: pathlib.Path) -> None:
+    # authorize checks the permission of a bot actor such as 'dependabot[bot]'.
+    gh.api("repos/o/r/collaborators/dependabot[bot]/permission", jq=".permission")
+    assert args(fake_gh) == ["api", "repos/o/r/collaborators/dependabot[bot]/permission", "--jq", ".permission"]
 
 
 def test_method_validation(fake_gh: pathlib.Path) -> None:

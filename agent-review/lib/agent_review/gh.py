@@ -20,8 +20,9 @@ from agent_review import runner, validate
 
 METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 # A relative API path with an optional query: never an option ('-...'), a
-# URL or a host.
-ENDPOINT = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._~/%-]*(?:\?[A-Za-z0-9._~%=&-]*)?")
+# URL or a host. '[' and ']' only in the path, for bot logins such as
+# 'dependabot[bot]' (bash passed them through to gh as they are).
+ENDPOINT = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._~/%\[\]-]*(?:\?[A-Za-z0-9._~%=&-]*)?")
 
 
 def api(
