@@ -29,9 +29,11 @@ adapter_init() { # name
 }
 
 # Prints stdin to stderr with every line prefixed and clipped, at most
-# DIAG_MAX_LINES lines.
+# DIAG_MAX_LINES lines; every '##[' is broken up with a zero-width space,
+# since the runner finds a legacy '##[command]' anywhere in a line.
 diag() {
-  head -n "${DIAG_MAX_LINES:-40}" | cut -c1-400 | sed "s/^/${ADAPTER_NAME:-harness}| /" >&2
+  head -n "${DIAG_MAX_LINES:-40}" | cut -c1-400 |
+    sed -e 's/##\[/#\xe2\x80\x8b#[/g' -e "s/^/${ADAPTER_NAME:-harness}| /" >&2
 }
 
 # A bounded summary of a run that produced no review: the harness exit code,

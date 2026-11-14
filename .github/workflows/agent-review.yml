@@ -524,8 +524,10 @@ jobs:
       # No key and no agent: only 'run-review' runs, and git on the PR with
       # hooks, filters and submodules disabled. Its output is prefixed (and
       # carriage returns dropped), so no line can start a workflow command
-      # ('::...::'); no '::stop-commands::', whose token would be printed to
-      # the live log first. 'sudo -E' passes the environment to AWF, which
+      # ('::...::'), and every '##[' is broken up with a zero-width space,
+      # because the runner finds the legacy '##[command]' anywhere in a line;
+      # no '::stop-commands::', whose token would be printed to the live log
+      # first. 'sudo -E' passes the environment to AWF, which
       # forwards none of it to the sandbox except what it sets itself.
       - &fetch-pr
         name: Fetch the pull request in the sandbox
@@ -544,7 +546,7 @@ jobs:
             --image-tag "${IMAGE_TAG}" \
             --container-workdir "${WS}" \
             -- /opt/agent-review/bin/run-review --phase fetch "${WS}" 2>&1 \
-            | /usr/bin/sed -u -e 's/\r//g' -e 's/^/awf| /'
+            | /usr/bin/sed -u -e 's/\r//g' -e 's/##\[/#\xe2\x80\x8b#[/g' -e 's/^/awf| /'
           # The default shell has no pipefail: report awf's status, not sed's.
           exit "${PIPESTATUS[0]}"
 
@@ -583,7 +585,7 @@ jobs:
             --image-tag "${IMAGE_TAG}" \
             --container-workdir "${WS}" \
             -- /opt/agent-review/bin/run-review --phase review "${WS}" 2>&1 \
-            | /usr/bin/sed -u -e 's/\r//g' -e 's/^/awf| /'
+            | /usr/bin/sed -u -e 's/\r//g' -e 's/##\[/#\xe2\x80\x8b#[/g' -e 's/^/awf| /'
           rc=${PIPESTATUS[0]}
           # The sandbox could write only to the workspace; still, treat the
           # host as tainted from here on: shell builtins only.

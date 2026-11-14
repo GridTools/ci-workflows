@@ -8,6 +8,8 @@ the "real ... passes" tests read the live tree, whatever its port state.
 """
 
 import copy
+import pathlib
+import subprocess
 from typing import Any
 
 import pytest
@@ -451,3 +453,38 @@ def test_probe_does_not_reach_gh() -> None:
     assert "agent_review.probe" in closure
     assert "agent_review.runner" in closure
     assert "agent_review.gh" not in closure
+
+
+# --- Sandbox output -----------------------------------------------------------------
+
+COMMON_SH = REPO["shell"]["harnesses/common.sh"]
+
+
+def test_real_sandbox_output_filters_pass() -> None:
+    assert ws.sandbox_output_problems(WORKFLOW, COMMON_SH) == []
+
+
+@pytest.mark.parametrize(
+    "old",
+    [" -e 's/##\\[/#\\xe2\\x80\\x8b#[/g'", " -e 's/^/awf| /'", " -e 's/\\r//g'"],
+)
+def test_awf_output_filter_is_required(old: str) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    # The review jobs share some steps through YAML aliases; all four awf calls must fail.
+    assert edit_runs(workflow, ws.AWF_OUTPUT_FILTER, ws.AWF_OUTPUT_FILTER.replace(old, ""))
+    assert len(ws.sandbox_output_problems(workflow, COMMON_SH)) == 4
+
+
+def test_diag_filter_is_required() -> None:
+    weakened = COMMON_SH.replace("-e 's/##\\[/#\\xe2\\x80\\x8b#[/g' ", "")
+    assert weakened != COMMON_SH
+    assert ws.sandbox_output_problems(WORKFLOW, weakened)
+
+
+def test_diag_breaks_legacy_commands(tmp_path: pathlib.Path) -> None:
+    script = tmp_path / "t.sh"
+    script.write_text(
+        f'. "{ws.AR_DIR}/harnesses/common.sh"\nprintf "a ##[warning]x\\n::error::y\\n" | ADAPTER_NAME=t diag\n'
+    )
+    result = subprocess.run(["/usr/bin/bash", str(script)], capture_output=True, timeout=30, check=True)
+    assert result.stderr == "t| a #\u200b#[warning]x\nt| ::error::y\n".encode()

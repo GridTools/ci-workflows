@@ -20,6 +20,7 @@ from workflow_structure import (
     load,
     python_word_problems,
     repository,
+    sandbox_output_problems,
     shebang_problems,
     shell_python_problems,
     strings,
@@ -162,6 +163,10 @@ def main() -> int:
     check_problems(call_site_problems(workflow, kinds), "call sites: roots per job and step, call form per file")
     check_problems(python_word_problems(workflow, kinds), "agent-review.yml: no other Python, no pip, no setup-python")
     check_problems(shell_python_problems(repo["shell"], kinds), "shell files: Python only in the exact call form")
+    check_problems(
+        sandbox_output_problems(workflow, repo["shell"]["harnesses/common.sh"]),
+        "sandbox output: prefixed, no carriage return, no legacy '##[' (awf steps and diag)",
+    )
     check_problems(entry_problems(repo["entries"], repo["lib"]), "bin/: bash scripts or the exact Python template")
     check_problems(tree_problems(repo["index"]), "tree: no symlink, .pth, .pyc, __pycache__, *customize.py")
     check_problems(shebang_problems(repo["first_lines"]), "no Python shebang outside lib/agent_review/ and tests/")

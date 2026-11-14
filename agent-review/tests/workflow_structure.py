@@ -295,6 +295,37 @@ def shell_python_problems(sources: Mapping[str, str], kinds: Mapping[str, str | 
     return problems
 
 
+# --- Sandbox output ------------------------------------------------------------------
+
+# Every line of AWF's output goes through exactly this filter: carriage
+# returns dropped, '##[' (the runner's legacy command syntax, matched
+# anywhere in a line) broken up with a zero-width space, a prefix so no line
+# starts with '::' (invariant 11).
+AWF_OUTPUT_FILTER = "| /usr/bin/sed -u -e 's/\\r//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e 's/^/awf| /'"
+DIAG_FILTER = "sed -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e \"s/^/${ADAPTER_NAME:-harness}| /\" >&2"
+
+
+def sandbox_output_problems(workflow: Mapping[str, Any], common_sh: str) -> list[str]:
+    """Every 'awf' call in agent-review.yml, and 'diag' in common.sh, filters its output."""
+    problems = []
+    awf_steps = 0
+    for job_id, _, step_name, script in run_scripts(workflow):
+        if '"${AWF_BIN}"' not in script:
+            continue
+        awf_steps += 1
+        lines = script.split("\n")
+        for number, line in enumerate(lines):
+            if line.strip().startswith("-- ") and not (
+                number + 1 < len(lines) and lines[number + 1].strip() == AWF_OUTPUT_FILTER
+            ):
+                problems.append(f"{job_id}/{step_name}: the awf command is not followed by '{AWF_OUTPUT_FILTER}'")
+    if awf_steps == 0:
+        problems.append("no awf call found")
+    if DIAG_FILTER not in common_sh:
+        problems.append(f"harnesses/common.sh: 'diag' does not end with '{DIAG_FILTER}'")
+    return problems
+
+
 # --- Tree ----------------------------------------------------------------------
 
 FORBIDDEN_NAMES = ("sitecustomize.py", "usercustomize.py", "__pycache__")
