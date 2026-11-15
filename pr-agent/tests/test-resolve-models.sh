@@ -54,7 +54,7 @@ test_missing_model() { setup; export IN_MODEL=''; rejected "Input model is empty
 test_missing_fallbacks() { setup; export IN_FALLBACKS=''; rejected "Input fallback_models is empty; use 'none' for no fallback."; }
 test_invalid_models() {
   local m
-  for m in '@format {env[OPENAI.KEY]}' 'a b' $'a\nb' '"x"' '[x]' '-x' "$(printf 'm%.0s' {1..129})"; do
+  for m in '@x' 'a b' $'a\nb' '"x"' '[x]' '-x' "$(printf 'm%.0s' {1..129})"; do
     setup; export IN_MODEL=${m}; rejected "Invalid model id" || { echo "    model: '${m}'"; return 1; }
     # A newline separates fallbacks, like a comma.
     [ "${m}" = $'a\nb' ] && continue
