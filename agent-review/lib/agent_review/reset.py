@@ -514,9 +514,10 @@ def verify_no_linked_directories(
     reset). A base symlink that only stands where a pattern expects a
     directory on the way (``container_specs``, not matched by a pattern
     itself) and that leads to a regular file, or to nothing (the pull request
-    deleted the target), passes as well: no instruction file can lie below it, and wildcard patterns ('docs/*/RULES.md')
-    would otherwise refuse every such link ('docs/logo.png -> ../assets/
-    logo.png'). A PR's symlink never qualifies (the reset replaces it), and a
+    deleted the target, or the base never had it), passes as well: no
+    instruction file can lie below it, and wildcard patterns
+    ('docs/*/RULES.md') would otherwise refuse every such link
+    ('docs/logo.png -> ../assets/logo.png'). A PR's symlink never qualifies (the reset replaces it), and a
     base symlink to anything else would let the agent read files the PR
     changes. A gitlink passes only if it is the base commit's own (same
     path, same commit) and its directory is empty (``_is_base_gitlink``).

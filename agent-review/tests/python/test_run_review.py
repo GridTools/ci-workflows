@@ -852,6 +852,16 @@ def test_base_link_to_a_file_on_a_wildcard_way_passes(
     assert (ws / "prompt.md").exists()
 
 
+def test_base_link_on_a_wildcard_way_to_a_target_the_base_never_had_passes(
+    tmp_path: pathlib.Path, upstream: Upstream
+) -> None:
+    fork = {**FORK, "docs/logo.png": "-> ../assets/missing.png"}
+    ws, log = fetch(tmp_path, upstream, fork, {"src/code.py": "x = 2\n"}, extra="docs/*/RULES.md\n")
+    assert log.endswith("exit 0"), log
+    assert not (ws / "repo" / "assets").exists()
+    assert (ws / "prompt.md").exists()
+
+
 def test_base_link_on_a_wildcard_way_to_a_pr_directory_fails_closed(tmp_path: pathlib.Path, upstream: Upstream) -> None:
     """The PR turns the link's target into a directory holding a file the pattern names: refused."""
     fork = {**FORK, "assets/logo.png": "png\n", "docs/logo.png": "-> ../assets/logo.png"}

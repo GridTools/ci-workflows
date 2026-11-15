@@ -341,7 +341,7 @@ STEP_STATE_FILES = ("GITHUB_ENV", "GITHUB_PATH")
 
 def _token_problems(where: str, node: Any, path: tuple[str, ...] = ()) -> list[str]:
     return [
-        f"{where}: '{match.group(0)}' in {'/'.join(found)}"
+        f"{where}: token reference {match.group(0)!r} in {'/'.join(found)}"
         for found, value in [*strings(node, path), *_keys(node, path)]
         for match in TOKEN_REF.finditer(value)
     ]

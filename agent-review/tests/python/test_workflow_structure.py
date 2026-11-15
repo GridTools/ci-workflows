@@ -728,10 +728,10 @@ def test_post_sandbox_rules_check_the_job_env(job: str, key: str, value: dict[st
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ({"GH_TOKEN": "${{ github.token }}"}, "workflow: 'GH_TOKEN' in env/GH_TOKEN"),
-        ({"T": "${{ github['token'] }}"}, "'github['token' in env/T"),
-        ({"T": "${{ secrets['K'] }}"}, "'secrets[' in env/T"),
-        ({"GITHUB_TOKEN": "x"}, "workflow: 'GITHUB_TOKEN' in env/GITHUB_TOKEN"),
+        ({"GH_TOKEN": "${{ github.token }}"}, "workflow: token reference 'GH_TOKEN' in env/GH_TOKEN"),
+        ({"T": "${{ github['token'] }}"}, 'token reference "github[\'token" in env/T'),
+        ({"T": "${{ secrets['K'] }}"}, "token reference 'secrets[' in env/T"),
+        ({"GITHUB_TOKEN": "x"}, "workflow: token reference 'GITHUB_TOKEN' in env/GITHUB_TOKEN"),
     ],
 )
 def test_post_sandbox_rules_check_the_workflow_env(value: dict[str, str], expected: str) -> None:
