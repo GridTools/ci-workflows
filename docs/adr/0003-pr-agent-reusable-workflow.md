@@ -10,7 +10,7 @@ Why-statement: In the context of repositories that each run their own copy of a 
 
 - [ADR 0002](0002-reusable-workflow.md) established the pattern: `workflow_call`, scripts fetched from `job.workflow_repository` at `job.workflow_sha`, the key as an explicitly mapped environment secret, a central endpoint allowlist, SHA pins.
 - PR Agent (v0.50.0, the Docker image) reads the diff and the caller's `.pr_agent.toml` through the API; it runs no PR code. Its settings come from the step environment, then the repository's `.pr_agent.toml`, then comment arguments; it refuses host-only keys (the key, endpoints, URLs, tokens, approvals) from the latter two. It has no setting that restricts commands or arguments.
-- Every other comment argument reaches Dynaconf (3.3.5) as a value. PR Agent disables Dynaconf's `@` directives only through the `AUTO_CAST_FOR_DYNACONF` environment variable, which a settings key of the same name overrides, and `--auto_cast_for_dynaconf=true` passes PR Agent's checks. A following `--pr_reviewer.extra_instructions="@format {env[OPENAI.KEY]}"` then resolves to the key, which `/config` publishes (found in review, confirmed by reading both sources).
+- Every other comment argument is applied as a setting, through the same settings library that loads the step environment and `.pr_agent.toml`, so a comment can override the workflow's settings and change how settings are interpreted.
 - In a single in-repository workflow, the permission and command checks are inline shell in the job that holds the key; moving them to scripts there would need a checkout in that job.
 - PR Agent parses a comment with shlex (posix, `"` as the only quote), which removes quotes and backslashes before it recognises `--section.key=value` arguments, so a filter outside PR Agent must model its parser exactly or over-approximate it; a filter that looked for a literal `--` after whitespace or a quote missed `\--x`, `-\-x` and `"-"-x`.
 
@@ -32,7 +32,7 @@ Why-statement: In the context of repositories that each run their own copy of a 
 - Each caller needs a dedicated key in an environment; a key shared with other workflows cannot be reused.
 - `/describe` always posts a comment; per-comment settings are not available.
 - Any `/word` comment from a writer starts the keyed job (a runner and a deployment record); one that is not a PR Agent command ends in a failure comment. `/generate_labels` writes labels.
-- An image upgrade must re-check the copied parser, how comment values reach Dynaconf, and the host-only keys.
+- An image upgrade must re-check the copied parser, how comment arguments are applied, and the host-only keys.
 - The release, pinning and supply-chain consequences of ADR 0002 apply unchanged; PR Agent ships in the same releases as the agent review.
 
 ## Alternatives considered
@@ -50,12 +50,12 @@ Why-statement: In the context of repositories that each run their own copy of a 
 ### No filter
 
 - Good, because it needs no model of PR Agent's parser and restricts nothing writers might want.
-- Bad, because any writer, or anyone who gets a writer to paste a command, could publish the key (Context).
+- Bad, because any writer, or anyone who gets a writer to paste a command, could override the workflow's settings and change how settings are interpreted (Context).
 
 ### A command allowlist as well
 
 - Good, because label-writing commands and stray `/word` comments would not run.
-- Bad, because it restricts users who already have write access without protecting the key, which the `--` filter alone does.
+- Bad, because it restricts users who already have write access and adds nothing the `--` filter does not already keep in force.
 
 ### Use `environment.deployment: false`
 

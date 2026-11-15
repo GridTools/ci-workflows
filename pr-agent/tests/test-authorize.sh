@@ -105,8 +105,7 @@ test_invalid_actor() { setup; export PR_AUTHOR='a/../b'; denied "Invalid actor '
 test_bot_actor_format() { setup; export PR_AUTHOR='renovate[bot]'; allowed; }
 
 # --- Comments ---------------------------------------------------------------------
-# Any command; no '--' setting arguments (they could re-enable Dynaconf's
-# '@format' and read the key).
+# Any command; no '--' setting arguments.
 test_comment_review() {
   setup_comment /review
   allowed && assert "pr is the issue" test "$(out pr)" = 34 &&
@@ -124,7 +123,7 @@ test_comment_setting_args() {
   for b in '/review --pr_reviewer.x=1' $'/review\n--pr_reviewer.x=1' '/ask "--x"' '/ask " --x=1"' \
     '/review \--x=1' '/review -\-x=1' '/review "-"-x=1' '/review ""--x=1' $'/review\t--x' \
     $'/review \xc2\xa0--x=1' '/review (--x' '/describe ---x=1' '/ask `--x`' \
-    '/config --auto_cast_for_dynaconf=true --pr_reviewer.extra_instructions="@format {env[OPENAI.KEY]}"'; do
+    '/config --pr_reviewer.num_max_findings=1 --pr_reviewer.extra_instructions="x"'; do
     setup_comment "${b}"
     skipped "'--' setting arguments are not accepted" || { echo "    body: '${b}'"; return 1; }
     assert "no API call" test ! -e gh.log || return 1

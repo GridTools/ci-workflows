@@ -5,12 +5,9 @@
 # Exit 0 and print nothing if allowed; exit 1 and print the reason if not.
 #
 # Any command is allowed; '--section.key=value' arguments are not. PR Agent
-# refuses only host-only keys from comments, and the others reach Dynaconf as
-# values: '--auto_cast_for_dynaconf=true' re-enables its '@format' directive,
-# after which another argument such as '--pr_reviewer.extra_instructions=
-# "@format {env[OPENAI.KEY]}"' resolves to the inference key, which '/config'
-# publishes. Refusing every setting argument closes that and any similar
-# route, and keeps the step environment's settings in force.
+# accepts most settings from comment arguments; refusing all of them keeps the
+# workflow's settings in force and keeps comments from changing how settings
+# are interpreted.
 #
 # PR Agent v0.50.0 splits a comment with shlex (posix, whitespace_split,
 # quotes '"', no commenters) after Python's strip(), and treats an argument as
