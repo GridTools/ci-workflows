@@ -45,11 +45,17 @@ Python (docs/adr/0004-python-runtime.md):
   subprocess only in agent_review/runner.py; no 'shell=' argument anywhere;
 - token reach: only the 'authorize' and 'publish-comment' entry points can
   import agent_review.gh; only gh.py names the 'gh' program (by basename)
-  and uses the trusted-host zone. The token itself is in a step's env, which
-  the workflow decides; this keeps the code that runs there narrow.
-- indirect access: no getattr/setattr/delattr on an imported module, no
-  globals()/vars()/locals(), no sys.modules (except the probe), no
-  standard-library module imported through agent_review.*.
+  and uses the trusted-host zone (see 'trust zones' below). The token
+  itself is in a step's env, which the workflow decides; this keeps the
+  code that runs there narrow.
+- indirect access: no getattr/setattr/delattr on an imported module or an
+  attribute of one (except sys.flags), no module used as a value ('x = os',
+  except the probe's list of its imports), no globals()/vars()/locals(), no
+  sys.modules (except the probe), no standard-library module imported
+  through agent_review.*;
+- trust zones: only gh.py names the trusted-host zone, only run_review.py
+  and sandbox_git.py the sandbox zone, and no module but runner.py the
+  tainted-host zone (collect-result starts no process).
 """
 
 import ast
@@ -343,13 +349,18 @@ def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ..
 def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
     """The steps after the agent's run ('id: agent') in both review jobs treat the host as tainted.
 
-    No token or secret reference; every 'run:' step uses the fixed shell
-    and 'PATH: /usr/bin:/bin'; only 'actions/upload-artifact' as an action;
-    the result upload's 'path' is exactly '${{ runner.temp }}/result'.
+    No token or secret reference, in those steps or in the job's own 'env:'
+    and 'defaults:', which every step inherits; every 'run:' step uses the
+    fixed shell and 'PATH: /usr/bin:/bin'; only 'actions/upload-artifact' as
+    an action; the result upload's 'path' is exactly '${{ runner.temp }}/result'.
     """
     problems = []
     for job_id in REVIEW_JOBS:
-        steps = workflow["jobs"][job_id]["steps"]
+        job = workflow["jobs"][job_id]
+        for key in ("env", "defaults"):
+            for path, value in [*strings(job.get(key) or {}, (key,)), *_keys(job.get(key) or {}, (key,))]:
+                problems += [f"{job_id}: '{ref}' in {'/'.join(path)}" for ref in TOKEN_REFS if ref in value]
+        steps = job["steps"]
         ids = [step.get("id") for step in steps]
         if "agent" not in ids:
             problems.append(f"{job_id}: no step with 'id: agent'")
@@ -532,8 +543,18 @@ BANNED_CALLS = frozenset(
 BANNED_OS = re.compile(r"system|popen|exec[lv]p?e?|spawn[lv]p?e?|posix_spawnp?|fork|forkpty", re.ASCII)
 # 'sys.modules' gives any loaded module, whatever the import rules say.
 SYS_MODULES_ALLOWED = frozenset({"lib/agent_review/probe.py"})
-# Only gh.py may run programs on the trusted host, where the token is.
-TRUSTED_ZONE_ALLOWED = frozenset({RUNNER_MODULE, GH_MODULE})
+# Each trust zone only in the modules that run programs there: gh.py on the
+# trusted host, where the token is; run-review in the sandbox. The tainted
+# host (collect-result) starts no process, so no module but runner.py names it.
+ZONE_ALLOWED = {
+    "TRUSTED_HOST": frozenset({RUNNER_MODULE, GH_MODULE}),
+    "SANDBOX": frozenset({RUNNER_MODULE, "lib/agent_review/run_review.py", "lib/agent_review/sandbox_git.py"}),
+    "TAINTED_HOST": frozenset({RUNNER_MODULE}),
+}
+# getattr() on these objects (not modules) is allowed: the probe reads sys.flags by name.
+GETATTR_ALLOWED = frozenset({"sys.flags"})
+# The probe lists its imported modules in a tuple to show that they import.
+MODULE_VALUES_ALLOWED = frozenset({"lib/agent_review/probe.py"})
 GH_ENTRY_POINTS = frozenset({"authorize", "publish-comment"})
 
 
@@ -556,6 +577,34 @@ def _imported_names(tree: ast.AST) -> set[str]:
     return bound
 
 
+def _module_names(tree: ast.AST) -> set[str]:
+    """The names that import statements bind to modules in ``tree``.
+
+    'import x' and 'import x.y' bind modules; 'from p import n' does when p is
+    the agent_review package or n is an allowlisted standard-library module.
+    """
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bound |= {a.asname or a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            bound |= {
+                a.asname or a.name for a in node.names if node.module == "agent_review" or a.name in STDLIB_ALLOWED
+            }
+    return bound
+
+
+def _dotted(node: ast.AST) -> str | None:
+    """'os.path' for the expression os.path; None if it is not a plain name chain."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id, *reversed(parts)])
+
+
 def ast_problems(sources: Mapping[str, str]) -> list[str]:
     """``sources``: path relative to agent-review/ -> text, for lib/ and the Python bin/ files."""
     problems = []
@@ -565,7 +614,9 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
         except SyntaxError as e:
             problems.append(f"{rel}: does not parse ({e.msg})")
             continue
-        modules = _imported_names(tree)
+        imported = _imported_names(tree)
+        modules = _module_names(tree)
+        attribute_bases = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
         for node in ast.walk(tree):
             where = f"{rel}:{getattr(node, 'lineno', 0)}"
             names: list[str] = []
@@ -603,8 +654,8 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
                     problems.append(f"{where}: '.{node.attr}'")
                 if node.attr == "subprocess" and rel != RUNNER_MODULE:
                     problems.append(f"{where}: '.subprocess' outside agent_review/runner.py")
-                if node.attr == "TRUSTED_HOST" and rel not in TRUSTED_ZONE_ALLOWED:
-                    problems.append(f"{where}: the trusted-host zone (the token) outside agent_review/gh.py")
+                if node.attr in ZONE_ALLOWED and rel not in ZONE_ALLOWED[node.attr]:
+                    problems.append(f"{where}: the zone '{node.attr}' outside its modules")
                 if (
                     node.attr == "modules"
                     and isinstance(node.value, ast.Name)
@@ -617,10 +668,19 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
                 and isinstance(node.func, ast.Name)
                 and node.func.id in ("getattr", "setattr", "delattr")
                 and node.args
-                and isinstance(node.args[0], ast.Name)
-                and node.args[0].id in modules
             ):
-                problems.append(f"{where}: {node.func.id}() on the module '{node.args[0].id}'")
+                chain = _dotted(node.args[0])
+                if chain is not None and chain.split(".")[0] in imported and chain not in GETATTR_ALLOWED:
+                    problems.append(f"{where}: {node.func.id}() on the module '{chain}'")
+            if (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id in modules
+                and id(node) not in attribute_bases
+                and rel not in MODULE_VALUES_ALLOWED
+            ):
+                # 'x = os' or 'f(os)' would hide a module from the rules above.
+                problems.append(f"{where}: the module '{node.id}' used as a value")
             if isinstance(node, ast.keyword) and node.arg == "shell":
                 problems.append(f"{where}: a 'shell=' argument")
             if (

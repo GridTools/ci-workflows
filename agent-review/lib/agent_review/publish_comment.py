@@ -47,9 +47,10 @@ LABEL = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}")
 RUN_URL = validate.pattern(r"https://github\.com/[A-Za-z0-9_./-]+")
 COMMENT_ID = validate.pattern(r"[1-9][0-9]{0,19}")
 # The projection of the comment listing; a constant, never data. Only the
-# first FIRST_LINE_CHARS characters of each first line: other users'
-# comments must not be able to push the listing past runner's output cap
-# (300 comments with 60 KB first lines would). Longer than any marker
+# first FIRST_LINE_CHARS characters of each first line, so that a long
+# comment adds at most about 1 KB to the listing (300 comments with 60 KB
+# first lines would otherwise pass runner's output cap). Many thousands of
+# comments still can, or hit the time limit: 'post' then fails. Longer than any marker
 # (at most 150 characters), so the comparison stays exact.
 FIRST_LINE_CHARS = 256
 LISTING_JQ = f'.[] | [.id, .user.login, (.body | split("\\n") | .[0] | .[0:{FIRST_LINE_CHARS}])] | @tsv'

@@ -392,6 +392,13 @@ def test_real_python_passes() -> None:
         "from agent_review import runner\nrunner.subprocess.run(['x'])\n",
         "from agent_review import runner\nrunner.os.system('id')\n",
         "import os\ngetattr(os, 'system')('id')\n",
+        "import os\ngetattr(os.path, 'system')('id')\n",
+        "import os\nx = os\ngetattr(x, 'system')('id')\n",
+        "import os\nf(os)\n",
+        "from agent_review import runner\nmodules = [runner]\n",
+        "import sys\nsetattr(sys.stdout, 'write', None)\n",
+        "from agent_review import runner\nrunner.run(runner.Zone.SANDBOX, ['git'])\n",
+        "from agent_review import runner\nrunner.run(runner.Zone.TAINTED_HOST, ['ls'])\n",
         "import os as _\n",
         "import sys\nsys.modules['os']\n",
         "globals()['__builtins__']\n",
@@ -407,6 +414,22 @@ def test_subprocess_and_gh_only_in_their_modules() -> None:
     assert ws.ast_problems({ws.GH_MODULE: "argv = ['gh', 'api']\n"}) == []
     assert ws.ast_problems({ws.RUNNER_MODULE: "subprocess.run(['x'], shell=False)\n"})
     assert ws.ast_problems({"bin/probe": "import subprocess\n"})
+
+
+def test_zones_only_in_their_modules() -> None:
+    sandbox = "from agent_review import runner\nrunner.run(runner.Zone.SANDBOX, ['git'])\n"
+    assert ws.ast_problems({"lib/agent_review/run_review.py": sandbox}) == []
+    assert ws.ast_problems({"lib/agent_review/sandbox_git.py": sandbox}) == []
+    assert ws.ast_problems({ws.GH_MODULE: sandbox})
+    assert ws.ast_problems({"lib/agent_review/collect_result.py": sandbox})
+    assert ws.ast_problems({"lib/agent_review/run_review.py": sandbox.replace("SANDBOX", "TRUSTED_HOST")})
+    assert ws.ast_problems({ws.RUNNER_MODULE: "Zone.TAINTED_HOST\n"}) == []
+
+
+def test_module_values_only_in_the_probe() -> None:
+    source = "from agent_review import files, runner\nMODULES = (files, runner)\n"
+    assert ws.ast_problems({"lib/agent_review/probe.py": source}) == []
+    assert ws.ast_problems({"lib/agent_review/x.py": source})
 
 
 def test_ordinary_code_is_allowed() -> None:
@@ -679,6 +702,24 @@ def test_post_sandbox_rules_cover_the_keyless_job_too() -> None:
     assert ws.post_sandbox_problems(workflow) == ["review-keyless/Report token usage: env PATH is not '/usr/bin:/bin'"]
     workflow["jobs"]["review"]["steps"] = [s for s in workflow["jobs"]["review"]["steps"] if s.get("id") != "agent"]
     assert "review: no step with 'id: agent'" in ws.post_sandbox_problems(workflow)
+
+
+@pytest.mark.parametrize("job", ["review", "review-keyless"])
+@pytest.mark.parametrize(
+    ("key", "value", "expected"),
+    [
+        ("env", {"GH_TOKEN": "x"}, "'GH_TOKEN' in env/GH_TOKEN"),
+        ("env", {"T": "${{ github.token }}"}, "'github.token' in env/T"),
+        ("env", {"K": "${{ secrets.inference_api_key }}"}, "'secrets.' in env/K"),
+        ("defaults", {"run": {"shell": "GH_TOKEN=${{ github.token }} bash {0}"}}, "in defaults/run/shell"),
+    ],
+)
+def test_post_sandbox_rules_check_the_job_env(job: str, key: str, value: dict[str, Any], expected: str) -> None:
+    # A job-level 'env:' or 'defaults:' reaches every step after the sandbox too.
+    workflow = copy.deepcopy(WORKFLOW)
+    workflow["jobs"][job][key] = {**(workflow["jobs"][job].get(key) or {}), **value}
+    found = ws.post_sandbox_problems(workflow)
+    assert any(p.startswith(f"{job}: ") and expected in p for p in found), found
 
 
 def test_steps_before_the_agent_may_hold_the_token() -> None:
