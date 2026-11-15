@@ -474,11 +474,15 @@ def _is_directory(repo_dir: str, path: str) -> bool:
         return False
 
 
-def _is_regular_file(repo_dir: str, path: str) -> bool:
+def _has_nothing_below(repo_dir: str, path: str) -> bool:
+    """True if ``path`` is a regular file or does not exist (nor its parent).
+
+    ``path`` is a resolved link target, so no component of it is a symlink.
+    """
     try:
         return stat.S_ISREG(os.lstat(os.path.join(repo_dir, path)).st_mode)
-    except FileNotFoundError:
-        return False
+    except (FileNotFoundError, NotADirectoryError):
+        return True
 
 
 def verify_no_linked_directories(
@@ -509,8 +513,8 @@ def verify_no_linked_directories(
     directory a file pattern goes through, whose other files are not
     reset). A base symlink that only stands where a pattern expects a
     directory on the way (``container_specs``, not matched by a pattern
-    itself) and that leads to a regular file passes as well: no instruction
-    file can lie below a file, and wildcard patterns ('docs/*/RULES.md')
+    itself) and that leads to a regular file, or to nothing (the pull request
+    deleted the target), passes as well: no instruction file can lie below it, and wildcard patterns ('docs/*/RULES.md')
     would otherwise refuse every such link ('docs/logo.png -> ../assets/
     logo.png'). A PR's symlink never qualifies (the reset replaces it), and a
     base symlink to anything else would let the agent read files the PR
@@ -540,8 +544,8 @@ def verify_no_linked_directories(
                 except _LinkRefused as e:
                     refused.append((path, None, str(e)))
                     continue
-                if path not in matched_itself and _is_regular_file(repo_dir, target):
-                    continue  # a directory on the way to a pattern, but a file: nothing is below it
+                if path not in matched_itself and _has_nothing_below(repo_dir, target):
+                    continue  # a directory on the way to a pattern, but a file or nothing: nothing is below it
                 specs = dir_specs if _is_directory(repo_dir, target) else file_specs
                 if not coverage.matching([target], specs):
                     refused.append((path, target, ""))

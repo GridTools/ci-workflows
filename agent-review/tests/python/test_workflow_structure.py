@@ -397,6 +397,9 @@ def test_real_python_passes() -> None:
         "import os\nf(os)\n",
         "from agent_review import runner\nmodules = [runner]\n",
         "import sys\nsetattr(sys.stdout, 'write', None)\n",
+        "import sys\ns = setattr\ns(sys.stdout, 'write', None)\n",
+        "f = getattr\n",
+        "fs = [delattr]\n",
         "from agent_review import runner\nrunner.run(runner.Zone.SANDBOX, ['git'])\n",
         "from agent_review import runner\nrunner.run(runner.Zone.TAINTED_HOST, ['ls'])\n",
         "import os as _\n",
@@ -720,6 +723,34 @@ def test_post_sandbox_rules_check_the_job_env(job: str, key: str, value: dict[st
     workflow["jobs"][job][key] = {**(workflow["jobs"][job].get(key) or {}), **value}
     found = ws.post_sandbox_problems(workflow)
     assert any(p.startswith(f"{job}: ") and expected in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ({"GH_TOKEN": "${{ github.token }}"}, "workflow: 'GH_TOKEN' in env/GH_TOKEN"),
+        ({"T": "${{ github['token'] }}"}, "'github['token' in env/T"),
+        ({"T": "${{ secrets['K'] }}"}, "'secrets[' in env/T"),
+        ({"GITHUB_TOKEN": "x"}, "workflow: 'GITHUB_TOKEN' in env/GITHUB_TOKEN"),
+    ],
+)
+def test_post_sandbox_rules_check_the_workflow_env(value: dict[str, str], expected: str) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    workflow["env"] = value
+    found = ws.post_sandbox_problems(workflow)
+    assert any(expected in p for p in found), found
+
+
+@pytest.mark.parametrize("job", ["review", "review-keyless"])
+@pytest.mark.parametrize("state_file", ["GITHUB_ENV", "GITHUB_PATH"])
+def test_a_token_step_must_not_write_step_state(job: str, state_file: str) -> None:
+    """A step that holds the token could pass it on to every later step through $GITHUB_ENV."""
+    workflow = copy.deepcopy(WORKFLOW)
+    steps = workflow["jobs"][job]["steps"]
+    index = next(i for i, step in enumerate(steps) if "GH_TOKEN" in (step.get("env") or {}))
+    steps[index] = {**steps[index], "run": steps[index]["run"] + f'\necho "T=$GH_TOKEN" >> "${state_file}"\n'}
+    found = ws.post_sandbox_problems(workflow)
+    assert any(p.startswith(f"{job}/") and "writes $GITHUB_ENV or $GITHUB_PATH" in p for p in found), found
 
 
 def test_steps_before_the_agent_may_hold_the_token() -> None:

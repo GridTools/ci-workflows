@@ -831,13 +831,24 @@ def test_base_symlink_to_a_covered_path_passes(  # noqa: PLR0917 (pytest paramet
     assert (ws / "prompt.md").exists()
 
 
+@pytest.mark.parametrize(
+    "head",
+    [
+        {"src/code.py": "x = 2\n"},
+        {"assets/logo.png": "PR png\n"},
+        {"assets/logo.png": None},  # deleted: the base link dangles
+        {"assets/logo.png": None, "assets/new.png": "png\n"},  # renamed
+    ],
+)
 @pytest.mark.parametrize("extra", ["docs/*/RULES.md\n", "*/x.md\n", "**/CONTRIBUTING.md\n"])
-def test_base_link_to_a_file_on_a_wildcard_way_passes(tmp_path: pathlib.Path, upstream: Upstream, extra: str) -> None:
+def test_base_link_to_a_file_on_a_wildcard_way_passes(
+    tmp_path: pathlib.Path, upstream: Upstream, extra: str, head: dict[str, str | None]
+) -> None:
     """A wildcard directory on the way ('docs/*') matches any entry; a link there to a file hides nothing."""
     fork = {**FORK, "assets/logo.png": "png\n", "docs/logo.png": "-> ../assets/logo.png"}
-    ws, log = fetch(tmp_path, upstream, fork, {"src/code.py": "x = 2\n"}, extra=extra)
+    ws, log = fetch(tmp_path, upstream, fork, head, extra=extra)
     assert log.endswith("exit 0"), log
-    assert (ws / "repo" / "docs" / "logo.png").read_text() == "png\n"
+    assert os.readlink(ws / "repo" / "docs" / "logo.png") == "../assets/logo.png"
     assert (ws / "prompt.md").exists()
 
 

@@ -49,8 +49,8 @@ Python (docs/adr/0004-python-runtime.md):
   itself is in a step's env, which the workflow decides; this keeps the
   code that runs there narrow.
 - indirect access: no getattr/setattr/delattr on an imported module or an
-  attribute of one (except sys.flags), no module used as a value ('x = os',
-  except the probe's list of its imports), no globals()/vars()/locals(), no
+  attribute of one (except sys.flags), nor those three used as values, no module used as a value ('x = os';
+  not checked in probe.py, which lists its imports), no globals()/vars()/locals(), no
   sys.modules (except the probe), no standard-library module imported
   through agent_review.*;
 - trust zones: only gh.py names the trusted-host zone, only run_review.py
@@ -332,7 +332,19 @@ def host_path_problems(workflow: Mapping[str, Any]) -> list[str]:
 TAINTED_SHELL = "/usr/bin/bash --noprofile --norc -e -o pipefail {0}"
 RESULT_PATH = "${{ runner.temp }}/result"
 RESULT_ARTIFACT = "agent-review-result-"
-TOKEN_REFS = ("GH_TOKEN", "github.token", "secrets.")
+# A token or secret reference, in any spelling the expression syntax allows
+# ('github.token', "github['token']", 'secrets.X', "secrets['X']").
+TOKEN_REF = re.compile(r"GH_TOKEN|GITHUB_TOKEN|github\s*(?:\.\s*token|\[\s*['\"]token)|secrets\s*[.\[]", re.IGNORECASE)
+# Files whose lines become the environment or PATH of every later step.
+STEP_STATE_FILES = ("GITHUB_ENV", "GITHUB_PATH")
+
+
+def _token_problems(where: str, node: Any, path: tuple[str, ...] = ()) -> list[str]:
+    return [
+        f"{where}: '{match.group(0)}' in {'/'.join(found)}"
+        for found, value in [*strings(node, path), *_keys(node, path)]
+        for match in TOKEN_REF.finditer(value)
+    ]
 
 
 def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:
@@ -349,18 +361,27 @@ def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ..
 def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
     """The steps after the agent's run ('id: agent') in both review jobs treat the host as tainted.
 
-    No token or secret reference, in those steps or in the job's own 'env:'
-    and 'defaults:', which every step inherits; every 'run:' step uses the
-    fixed shell and 'PATH: /usr/bin:/bin'; only 'actions/upload-artifact' as
-    an action; the result upload's 'path' is exactly '${{ runner.temp }}/result'.
+    No token or secret reference, in those steps or in what they inherit:
+    the workflow's and the job's 'env:' and 'defaults:', and the
+    $GITHUB_ENV and $GITHUB_PATH files, which no step of the job that holds
+    a token may name; every 'run:' step uses the fixed shell and
+    'PATH: /usr/bin:/bin'; only 'actions/upload-artifact' as an action; the
+    result upload's 'path' is exactly '${{ runner.temp }}/result'.
     """
     problems = []
+    for key in ("env", "defaults"):
+        problems += _token_problems("workflow", workflow.get(key) or {}, (key,))
     for job_id in REVIEW_JOBS:
         job = workflow["jobs"][job_id]
         for key in ("env", "defaults"):
-            for path, value in [*strings(job.get(key) or {}, (key,)), *_keys(job.get(key) or {}, (key,))]:
-                problems += [f"{job_id}: '{ref}' in {'/'.join(path)}" for ref in TOKEN_REFS if ref in value]
+            problems += _token_problems(job_id, job.get(key) or {}, (key,))
         steps = job["steps"]
+        for step in steps:
+            text = "\n".join(value for _, value in strings(step))
+            if any(name in text for name in STEP_STATE_FILES) and _token_problems("", step):
+                problems.append(
+                    f"{job_id}/{step.get('name', '?')}: holds a token and writes $GITHUB_ENV or $GITHUB_PATH"
+                )
         ids = [step.get("id") for step in steps]
         if "agent" not in ids:
             problems.append(f"{job_id}: no step with 'id: agent'")
@@ -368,8 +389,7 @@ def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
         uploads = 0
         for step in steps[ids.index("agent") + 1 :]:
             where = f"{job_id}/{step.get('name', '?')}"
-            for path, value in [*strings(step), *_keys(step)]:
-                problems += [f"{where}: '{ref}' in {'/'.join(path)}" for ref in TOKEN_REFS if ref in value]
+            problems += _token_problems(where, step)
             if "run" in step:
                 if step.get("shell") != TAINTED_SHELL:
                     problems.append(f"{where}: shell is not '{TAINTED_SHELL}'")
@@ -551,9 +571,11 @@ ZONE_ALLOWED = {
     "SANDBOX": frozenset({RUNNER_MODULE, "lib/agent_review/run_review.py", "lib/agent_review/sandbox_git.py"}),
     "TAINTED_HOST": frozenset({RUNNER_MODULE}),
 }
+ATTRIBUTE_BUILTINS = ("getattr", "setattr", "delattr")
 # getattr() on these objects (not modules) is allowed: the probe reads sys.flags by name.
 GETATTR_ALLOWED = frozenset({"sys.flags"})
-# The probe lists its imported modules in a tuple to show that they import.
+# The probe lists its imported modules in a tuple to show that they import;
+# the rule is off for the whole file.
 MODULE_VALUES_ALLOWED = frozenset({"lib/agent_review/probe.py"})
 GH_ENTRY_POINTS = frozenset({"authorize", "publish-comment"})
 
@@ -617,6 +639,7 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
         imported = _imported_names(tree)
         modules = _module_names(tree)
         attribute_bases = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        called = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
         for node in ast.walk(tree):
             where = f"{rel}:{getattr(node, 'lineno', 0)}"
             names: list[str] = []
@@ -666,7 +689,7 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id in ("getattr", "setattr", "delattr")
+                and node.func.id in ATTRIBUTE_BUILTINS
                 and node.args
             ):
                 chain = _dotted(node.args[0])
@@ -681,6 +704,9 @@ def ast_problems(sources: Mapping[str, str]) -> list[str]:
             ):
                 # 'x = os' or 'f(os)' would hide a module from the rules above.
                 problems.append(f"{where}: the module '{node.id}' used as a value")
+            if isinstance(node, ast.Name) and node.id in ATTRIBUTE_BUILTINS and id(node) not in called:
+                # 's = setattr' would hide the call from the getattr rule.
+                problems.append(f"{where}: '{node.id}' used as a value")
             if isinstance(node, ast.keyword) and node.arg == "shell":
                 problems.append(f"{where}: a 'shell=' argument")
             if (
