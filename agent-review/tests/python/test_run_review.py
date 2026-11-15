@@ -831,6 +831,25 @@ def test_base_symlink_to_a_covered_path_passes(  # noqa: PLR0917 (pytest paramet
     assert (ws / "prompt.md").exists()
 
 
+@pytest.mark.parametrize("extra", ["docs/*/RULES.md\n", "*/x.md\n", "**/CONTRIBUTING.md\n"])
+def test_base_link_to_a_file_on_a_wildcard_way_passes(tmp_path: pathlib.Path, upstream: Upstream, extra: str) -> None:
+    """A wildcard directory on the way ('docs/*') matches any entry; a link there to a file hides nothing."""
+    fork = {**FORK, "assets/logo.png": "png\n", "docs/logo.png": "-> ../assets/logo.png"}
+    ws, log = fetch(tmp_path, upstream, fork, {"src/code.py": "x = 2\n"}, extra=extra)
+    assert log.endswith("exit 0"), log
+    assert (ws / "repo" / "docs" / "logo.png").read_text() == "png\n"
+    assert (ws / "prompt.md").exists()
+
+
+def test_base_link_on_a_wildcard_way_to_a_pr_directory_fails_closed(tmp_path: pathlib.Path, upstream: Upstream) -> None:
+    """The PR turns the link's target into a directory holding a file the pattern names: refused."""
+    fork = {**FORK, "assets/logo.png": "png\n", "docs/logo.png": "-> ../assets/logo.png"}
+    head = {"assets/logo.png": None, "assets/logo.png/RULES.md": "PR EVIL\n"}
+    ws, log = fetch(tmp_path, upstream, fork, head, extra="docs/*/RULES.md\n")
+    assert_stopped(ws, log)
+    assert "'docs/logo.png' is a symlink in the base commit to 'assets/logo.png', " + UNCOVERED in log, log
+
+
 # --- The central reset list (final security review R1) ------------------------------------------
 
 

@@ -474,6 +474,13 @@ def _is_directory(repo_dir: str, path: str) -> bool:
         return False
 
 
+def _is_regular_file(repo_dir: str, path: str) -> bool:
+    try:
+        return stat.S_ISREG(os.lstat(os.path.join(repo_dir, path)).st_mode)
+    except FileNotFoundError:
+        return False
+
+
 def verify_no_linked_directories(
     git: Git,
     repo_dir: str,
@@ -500,7 +507,12 @@ def verify_no_linked_directories(
     leads to: a file must match a reset pattern itself; a directory must be
     a directory pattern's directory or lie below one (never merely a
     directory a file pattern goes through, whose other files are not
-    reset). A PR's symlink never qualifies (the reset replaces it), and a
+    reset). A base symlink that only stands where a pattern expects a
+    directory on the way (``container_specs``, not matched by a pattern
+    itself) and that leads to a regular file passes as well: no instruction
+    file can lie below a file, and wildcard patterns ('docs/*/RULES.md')
+    would otherwise refuse every such link ('docs/logo.png -> ../assets/
+    logo.png'). A PR's symlink never qualifies (the reset replaces it), and a
     base symlink to anything else would let the agent read files the PR
     changes. A gitlink passes only if it is the base commit's own (same
     path, same commit) and its directory is empty (``_is_base_gitlink``).
@@ -516,6 +528,7 @@ def verify_no_linked_directories(
     refused: list[tuple[str, str | None, str]] = []
     with Coverage(scratch_parent, env, ()) as coverage:
         try:
+            matched_itself = set(coverage.matching(linked, file_specs))
             for path in coverage.matching(linked, link_specs):
                 if not os.path.islink(os.path.join(repo_dir, path)):  # a gitlink
                     if not _is_base_gitlink(git, repo_dir, base_sha, path):
@@ -527,6 +540,8 @@ def verify_no_linked_directories(
                 except _LinkRefused as e:
                     refused.append((path, None, str(e)))
                     continue
+                if path not in matched_itself and _is_regular_file(repo_dir, target):
+                    continue  # a directory on the way to a pattern, but a file: nothing is below it
                 specs = dir_specs if _is_directory(repo_dir, target) else file_specs
                 if not coverage.matching([target], specs):
                     refused.append((path, target, ""))
