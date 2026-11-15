@@ -33,7 +33,10 @@ The invisible characters go first, so removing them cannot join a delimiter
 that a later replacement would miss (``<`` U+200B ``!--``). The later
 replacements cannot create new matches: none inserts ``<``, ``>``, ``&``,
 ``]`` or ``@``, and the named-reference rule runs before the numeric one.
-The order and patterns are those of the bash version this replaces.
+The order and the later replacements are those of the bash version this
+replaces; the deliberate differences are the ``Cf`` drop, ``<`` before an
+ASCII letter or ``/`` (bash: only ``!`` and ``?``) and the cut that never
+splits a neutralisation.
 
 Pure functions on bytes and text: this module runs no program and has no
 token (its import closure excludes ``agent_review.gh``).

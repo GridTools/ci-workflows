@@ -427,8 +427,9 @@ def read_review(path: str) -> tuple[bytes, bool] | None:
     a final newline). Over REVIEW_MAX_BYTES, it is cut and a note appended;
     that is decided from the bytes read, never from the file's size, which
     the agent can change meanwhile. Invalid or cut UTF-8 sequences are
-    dropped. The file is scanned, never read whole: the agent controls its
-    size.
+    dropped. The file is scanned in chunks, never held in memory whole: the
+    agent controls its size (without a heading, the scan for one still reads
+    to the end of the file).
     """
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
