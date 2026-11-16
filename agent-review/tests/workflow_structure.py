@@ -453,49 +453,82 @@ DIAG_FILTER = "sed -e 's/\\x00//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e \"s/^/${
 
 AWF_CALL = '"${AWF_BIN}"'
 AWF_COMMAND_END = " 2>&1 \\"
+# 'AWF_BIN' in any spelling, or 'awf' as a word (not '/awf', 'awf-…', 'awf.json').
+AWF_WORD = re.compile(r"AWF_BIN|(?<![\w./-])awf(?![\w.-])")
+# The one other line that names awf: where the binary is found.
+AWF_SETTER = 'echo "AWF_BIN=$(command -v awf)" >> "$GITHUB_ENV"'
+# The only lines allowed after an awf call's filter: they report its status.
+AFTER_AWF = frozenset(
+    {"rc=${PIPESTATUS[0]}", 'echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"', 'exit "${rc}"', 'exit "${PIPESTATUS[0]}"'}
+)
+COMMON_SH = "harnesses/common.sh"
+DIAG_DEFINITION = re.compile(r"^\s*(?:function\s+diag\b|diag\s*\(\s*\))", re.MULTILINE)
 
 
 def _awf_call_problems(where: str, script: str) -> list[str]:
-    """Each 'awf' call continues to a '-- …  2>&1 \\' line followed by exactly the filter line."""
+    """awf is named only as '"${AWF_BIN}"' (or where it is found); each call is filtered and ends the step.
+
+    Each call continues to a '-- …  2>&1 \\' line followed by exactly the
+    filter line; after it come only comments and the lines in AFTER_AWF.
+    """
     problems = []
     lines = script.split("\n")
+    calls = []
     for number, line in enumerate(lines):
-        if AWF_CALL not in line:
+        code = line.strip()
+        if code.startswith("#") or code == AWF_SETTER:
             continue
+        if AWF_WORD.search(line.replace(AWF_CALL, "")):
+            problems.append(f"{where}: line {number + 1} names awf other than as the call '{AWF_CALL}'")
+        if AWF_CALL in line:
+            calls.append(number)
+    for index, number in enumerate(calls):
         end = number
         while end < len(lines) and not lines[end].strip().startswith("-- ") and lines[end].endswith(" \\"):
             end += 1
         command = lines[end].strip() if end < len(lines) else ""
         if not command.startswith("-- "):
             problems.append(f"{where}: the awf call on line {number + 1} has no '-- ' command line")
-        elif not command.endswith(AWF_COMMAND_END):
+            continue
+        if not command.endswith(AWF_COMMAND_END):
             problems.append(f"{where}: the awf command does not end with '{AWF_COMMAND_END}' (stderr unfiltered)")
-        elif not (end + 1 < len(lines) and lines[end + 1].strip() == AWF_OUTPUT_FILTER):
+            continue
+        if not (end + 1 < len(lines) and lines[end + 1].strip() == AWF_OUTPUT_FILTER):
             problems.append(f"{where}: the awf command is not followed by '{AWF_OUTPUT_FILTER}'")
+            continue
+        stop = calls[index + 1] if index + 1 < len(calls) else len(lines)
+        for after in range(end + 2, stop):
+            code = lines[after].strip()
+            if code and not code.startswith("#") and code not in AFTER_AWF:
+                problems.append(f"{where}: line {after + 1} after the awf call is not one of {sorted(AFTER_AWF)}")
     return problems
 
 
-def _diag_problems(common_sh: str) -> list[str]:
-    """'diag' is one pipeline that ends with exactly the filter, its only output."""
-    body = re.search(r"^diag\(\) \{\n(.*?)\n\}$", common_sh, re.MULTILINE | re.DOTALL)
+def _diag_problems(shell: Mapping[str, str]) -> list[str]:
+    """'diag' is defined once, in common.sh, as one pipeline that ends with exactly the filter."""
+    defined = [path for path, text in shell.items() for _ in DIAG_DEFINITION.finditer(text)]
+    if defined != [COMMON_SH]:
+        return [f"'diag' is defined in {defined}, not once in {COMMON_SH}"]
+    body = re.search(r"^diag\(\) \{\n(.*?)\n\}$", shell[COMMON_SH], re.MULTILINE | re.DOTALL)
     lines = [line.strip() for line in body.group(1).split("\n")] if body else []
     if not lines or lines[-1] != DIAG_FILTER or not all(line.endswith("|") for line in lines[:-1]):
-        return [f"harnesses/common.sh: 'diag' is not a pipeline that ends with '{DIAG_FILTER}'"]
+        return [f"{COMMON_SH}: 'diag' is not a pipeline that ends with '{DIAG_FILTER}'"]
     return []
 
 
-def sandbox_output_problems(workflow: Mapping[str, Any], common_sh: str) -> list[str]:
-    """Every 'awf' call in agent-review.yml, and 'diag' in common.sh, filters all its output."""
+def sandbox_output_problems(workflow: Mapping[str, Any], shell: Mapping[str, str]) -> list[str]:
+    """Every 'awf' call in agent-review.yml, and 'diag' in the harness shell files, filters all its output.
+
+    ``shell`` maps each tracked shell file under agent-review/ to its text.
+    """
     problems = []
     awf_steps = 0
     for job_id, _, step_name, script in run_scripts(workflow):
-        if AWF_CALL not in script:
-            continue
-        awf_steps += 1
+        awf_steps += AWF_CALL in script
         problems += _awf_call_problems(f"{job_id}/{step_name}", script)
     if awf_steps == 0:
         problems.append("no awf call found")
-    return problems + _diag_problems(common_sh)
+    return problems + _diag_problems(shell)
 
 
 # --- The collect gate -------------------------------------------------------------

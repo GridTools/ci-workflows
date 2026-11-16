@@ -484,11 +484,12 @@ def test_probe_does_not_reach_gh() -> None:
 
 # --- Sandbox output -----------------------------------------------------------------
 
-COMMON_SH = REPO["shell"]["harnesses/common.sh"]
+SHELL = REPO["shell"]
+COMMON_SH = SHELL[ws.COMMON_SH]
 
 
 def test_real_sandbox_output_filters_pass() -> None:
-    assert ws.sandbox_output_problems(WORKFLOW, COMMON_SH) == []
+    assert ws.sandbox_output_problems(WORKFLOW, SHELL) == []
 
 
 @pytest.mark.parametrize(
@@ -499,13 +500,13 @@ def test_awf_output_filter_is_required(old: str) -> None:
     workflow = copy.deepcopy(WORKFLOW)
     # The review jobs share some steps through YAML aliases; all four awf calls must fail.
     assert edit_runs(workflow, ws.AWF_OUTPUT_FILTER, ws.AWF_OUTPUT_FILTER.replace(old, ""))
-    assert len(ws.sandbox_output_problems(workflow, COMMON_SH)) == 4
+    assert len(ws.sandbox_output_problems(workflow, SHELL)) == 4
 
 
 def test_awf_stderr_must_go_through_the_filter() -> None:
     workflow = copy.deepcopy(WORKFLOW)
     assert edit_runs(workflow, '"${WS}" 2>&1 \\\n', '"${WS}" \\\n')
-    found = ws.sandbox_output_problems(workflow, COMMON_SH)
+    found = ws.sandbox_output_problems(workflow, SHELL)
     assert len(found) == 4 and all("stderr unfiltered" in p for p in found), found
 
 
@@ -525,21 +526,56 @@ FILTER = "            " + ws.AWF_OUTPUT_FILTER
 )
 def test_every_awf_call_is_filtered(script: str, expected: str) -> None:
     workflow = {"jobs": {"review": {"steps": [{"name": "Run", "run": script}]}}}
-    found = ws.sandbox_output_problems(workflow, COMMON_SH)
+    found = ws.sandbox_output_problems(workflow, SHELL)
     assert len(found) == 1 and expected in found[0], found
 
 
+@pytest.mark.parametrize(
+    "line",
+    ['sudo -E "$AWF_BIN" -- /usr/bin/true', "sudo -E ${AWF_BIN} -- true", "sudo -E awf -- true", 'x="${AWF_BIN}x"'],
+)
+def test_awf_is_named_only_as_the_call(line: str) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    step = next(
+        s for s in workflow["jobs"]["review"]["steps"] if s.get("name") == "Fetch the pull request in the sandbox"
+    )
+    step["run"] = line + "\n" + step["run"]
+    found = ws.sandbox_output_problems(workflow, SHELL)
+    assert found and all("line 1 names awf other than as the call" in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    ("name", "line"),
+    [
+        ("Fetch the pull request in the sandbox", 'cat "${WS}/prompt.md"'),
+        ("Run the review in the sandbox", 'echo "rc=${rc}"'),
+        ("Run the review in the sandbox", "exit 0; cat x"),
+    ],
+)
+def test_only_status_lines_follow_the_awf_call(name: str, line: str) -> None:
+    """A line after the call could print pull request text to the log, unfiltered."""
+    workflow = copy.deepcopy(WORKFLOW)
+    step = next(s for s in workflow["jobs"]["review"]["steps"] if s.get("name") == name)
+    step["run"] = step["run"] + line + "\n"
+    found = ws.sandbox_output_problems(workflow, SHELL)
+    assert found and all("after the awf call is not one of" in p for p in found), found
+
+
 def test_a_filtered_awf_call_passes() -> None:
-    script = 'sudo -E "${AWF_BIN}" \\\n  --config c \\\n  -- run-review "${WS}" 2>&1 \\\n' + FILTER + "\nexit 0\n"
+    script = (
+        'sudo -E "${AWF_BIN}" \\\n  --config c \\\n  -- run-review "${WS}" 2>&1 \\\n'
+        + FILTER
+        + '\n  # its status\n  exit "${PIPESTATUS[0]}"\n'
+    )
     workflow = {"jobs": {"review": {"steps": [{"name": "Run", "run": script}]}}}
-    assert ws.sandbox_output_problems(workflow, COMMON_SH) == []
+    assert ws.sandbox_output_problems(workflow, SHELL) == []
 
 
 def test_diag_filter_is_required() -> None:
     for rule in ("-e 's/##\\[/#\\xe2\\x80\\x8b#[/g' ", "-e 's/\\x00//g' "):
         weakened = COMMON_SH.replace(rule, "")
         assert weakened != COMMON_SH
-        assert ws.sandbox_output_problems(WORKFLOW, weakened)
+        assert ws.sandbox_output_problems(WORKFLOW, {**SHELL, ws.COMMON_SH: weakened})
 
 
 @pytest.mark.parametrize(
@@ -558,9 +594,23 @@ def test_diag_filter_is_required() -> None:
 def test_diag_must_be_one_filtered_pipeline(change: Any) -> None:
     weakened = change(COMMON_SH)
     assert weakened != COMMON_SH
-    assert ws.sandbox_output_problems(WORKFLOW, weakened) == [
-        f"harnesses/common.sh: 'diag' is not a pipeline that ends with '{ws.DIAG_FILTER}'"
-    ]
+    found = ws.sandbox_output_problems(WORKFLOW, {**SHELL, ws.COMMON_SH: weakened})
+    assert len(found) == 1 and "'diag' is" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("path", "definition"),
+    [
+        (ws.COMMON_SH, "diag() { cat >&2; }"),
+        (ws.COMMON_SH, "function diag { cat >&2; }"),
+        ("harnesses/stub/run.sh", "  diag () {\n  cat >&2\n}"),
+    ],
+)
+def test_diag_must_be_defined_once(path: str, definition: str) -> None:
+    """Bash runs the last definition, so a second one would replace the filtered 'diag'."""
+    shell = {**SHELL, path: SHELL[path] + "\n" + definition + "\n"}
+    found = ws.sandbox_output_problems(WORKFLOW, shell)
+    assert len(found) == 1 and "'diag' is defined in" in found[0], found
 
 
 def test_diag_breaks_legacy_commands(tmp_path: pathlib.Path) -> None:

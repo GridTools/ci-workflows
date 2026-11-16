@@ -172,7 +172,7 @@ def main() -> int:
         post_sandbox_problems(workflow), "after the sandbox: no token, fixed shell and PATH, the result path"
     )
     check_problems(
-        sandbox_output_problems(workflow, repo["shell"]["harnesses/common.sh"]),
+        sandbox_output_problems(workflow, repo["shell"]),
         "sandbox output: prefixed, no carriage return, no legacy '##[' (awf steps and diag)",
     )
     check_problems(collect_gate_problems(workflow), "'Collect the result' runs only after a successful teardown")
