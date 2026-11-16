@@ -264,15 +264,16 @@ Before tagging (`v0.1.0` and every later release):
 
 1. The self-test is green on the commit to be tagged, which is on `main` (merged through a reviewed PR).
 2. Repository settings are in place: tag ruleset for `v*` (restricted creation, no update, no deletion), immutable releases, the self-test jobs as required status checks on `main`, no repository or organization secret available to this repository.
-3. Cross-repository tests from a **separate test caller repository** pinned to the release candidate's SHA on `main` (its own `agent-review` environment, default branch only, with a dedicated low-budget key; never a key here):
+3. Cross-repository tests from a **separate test caller repository** pinned to the release candidate's SHA on `main` (its own `agent-review` environment, default branch only, admins not exempt, with a dedicated low-budget key; never a key here; an Actions event policy for its workflow file allowing `pull_request_target`, `workflow_dispatch` and `pull_request`, without which `pull_request_target` is blocked from 2 December 2026; no forced dry run left in its workflow file):
    1. `workflow_dispatch` dry run with `stub` from the default branch: the notice shows `workflow GridTools/ci-workflows@<sha>; caller <test repo>@<sha>` with distinct values, the keyless job runs, no deployment is recorded.
    2. `pull_request` caller test mode with `stub`: dry run forced, the PR-content notice; with `opencode`: rejected in `authorize`.
-   3. The label path on a fixture PR (`pull_request_target`, `labeled`), with a writer: a real post, updated in place on a second run.
+   3. The label path on a fixture PR (`pull_request_target`, `labeled`), with a writer: a real post through `/usr/bin/gh` under the publish steps' fixed `PATH: /usr/bin:/bin`, updated in place on a second run.
    4. A non-writer adding the label (or the PR's author without write) is denied with a notice.
    5. A keyed dispatch from a branch other than the default: denied by the environment rule before getting a runner.
    6. One keyed dry run per harness (`opencode`, `pi`) with the dedicated key: a rendered review, the token-usage table, `OpenAI=true` only in the review run.
    7. A shared repository secret named like the mapped one makes `authorize` fail (then delete it).
    8. A pin to a commit that exists only in a fork of this repository: record what the notice prints, and that the caller-side check in [Pinning and updating](#pinning-and-updating) rejects it.
    9. A tag-pinned call, re-run after the tag moved (in a scratch repository, never with release tags here): record which commit the re-run uses.
+   10. A PR from a fork, by an account without write access, labelled by a writer (`pull_request_target`): the keyed review runs on the fork's head inside the sandbox, the instruction-file reset and its post-conditions hold, and the comment is posted; nothing from the fork runs on the host.
 4. Release notes list breaking changes and the evidence (run URLs) of step 3.
 5. Callers update their pin to the tag's SHA and check it ([Pinning and updating](#pinning-and-updating)).
