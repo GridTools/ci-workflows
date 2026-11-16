@@ -367,6 +367,21 @@ def secret_refs(value: str) -> list[str]:
 
 # Files whose lines become the environment or PATH of every later step.
 STEP_STATE_FILES = ("GITHUB_ENV", "GITHUB_PATH")
+# Variables that run code before a step's script: bash reads BASH_ENV
+# (and ENV in POSIX mode) despite '--noprofile --norc', SHELLOPTS and
+# BASHOPTS set options, BASH_FUNC_* define functions, LD_* load libraries.
+STARTUP_VARIABLE = re.compile(
+    r"\b(?:BASH_ENV|ENV|SHELLOPTS|BASHOPTS|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT)\b|\bBASH_FUNC_"
+)
+
+
+def _startup_problems(where: str, node: Any) -> list[str]:
+    """No 'env:' key in ``node`` is a startup variable (STARTUP_VARIABLE)."""
+    return [
+        f"{where}: sets {key!r}, which runs code before the step's script"
+        for key in (node.get("env") or {})
+        if STARTUP_VARIABLE.match(str(key))
+    ]
 
 
 def _token_problems(where: str, node: Any, path: tuple[str, ...] = ()) -> list[str]:
@@ -393,28 +408,34 @@ def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ..
 def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
     """The steps after the agent's run ('id: agent') in both review jobs treat the host as tainted.
 
-    No token or secret reference ('TOKEN_REF', 'context_refs'), in those
-    steps or in what they inherit:
+    No step of those jobs, nor their job or the workflow, sets a variable
+    that runs code before a step's script ('BASH_ENV', ...; in 'env:' or
+    through $GITHUB_ENV). No token or secret reference ('TOKEN_REF',
+    'context_refs'), in those steps or in what they inherit:
     the workflow's and the job's 'env:' and 'defaults:', and the
     $GITHUB_ENV and $GITHUB_PATH files, which no step of the job that holds
     a token may name; every 'run:' step uses the fixed shell and
     'PATH: /usr/bin:/bin'; only 'actions/upload-artifact' as an action; the
     result upload's 'path' is exactly '${{ runner.temp }}/result'.
     """
-    problems = []
+    problems = _startup_problems("workflow", workflow)
     for key in ("env", "defaults"):
         problems += _token_problems("workflow", workflow.get(key) or {}, (key,))
     for job_id in REVIEW_JOBS:
         job = workflow["jobs"][job_id]
+        problems += _startup_problems(job_id, job)
         for key in ("env", "defaults"):
             problems += _token_problems(job_id, job.get(key) or {}, (key,))
         steps = job["steps"]
         for step in steps:
+            where = f"{job_id}/{step.get('name', '?')}"
+            problems += _startup_problems(where, step)
             text = "\n".join(value for _, value in strings(step))
-            if any(name in text for name in STEP_STATE_FILES) and _token_problems("", step):
-                problems.append(
-                    f"{job_id}/{step.get('name', '?')}: holds a token and writes $GITHUB_ENV or $GITHUB_PATH"
-                )
+            if any(name in text for name in STEP_STATE_FILES):
+                if _token_problems("", step):
+                    problems.append(f"{where}: holds a token and writes $GITHUB_ENV or $GITHUB_PATH")
+                if STARTUP_VARIABLE.search(text):
+                    problems.append(f"{where}: writes $GITHUB_ENV or $GITHUB_PATH and names a startup variable")
         ids = [step.get("id") for step in steps]
         if "agent" not in ids:
             problems.append(f"{job_id}: no step with 'id: agent'")

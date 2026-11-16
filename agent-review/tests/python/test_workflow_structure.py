@@ -931,6 +931,34 @@ def test_a_token_step_must_not_write_step_state(job: str, state_file: str) -> No
     assert any(p.startswith(f"{job}/") and "writes $GITHUB_ENV or $GITHUB_PATH" in p for p in found), found
 
 
+@pytest.mark.parametrize("name", ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "BASH_FUNC_cat%%", "LD_PRELOAD"])
+@pytest.mark.parametrize(
+    "where", ["workflow", "review", "review/Collect the result", "review-keyless/Fetch trusted files"]
+)
+def test_no_startup_variable_in_the_review_jobs(name: str, where: str) -> None:
+    """BASH_ENV runs a file before the step's script, '--noprofile --norc' notwithstanding."""
+    workflow = copy.deepcopy(WORKFLOW)
+    if where == "workflow":
+        node = workflow
+    elif "/" not in where:
+        node = workflow["jobs"][where]
+    else:
+        job, name_ = where.split("/")
+        node = next(s for s in workflow["jobs"][job]["steps"] if s.get("name") == name_)
+    node["env"] = {**(node.get("env") or {}), name: "${{ github.workspace }}/agent-review/out/env.sh"}
+    found = ws.post_sandbox_problems(workflow)
+    assert any(p.startswith(f"{where}: sets {name!r}") for p in found), found
+
+
+@pytest.mark.parametrize("line", ['echo "BASH_ENV=${WS}/out/x" >> "$GITHUB_ENV"', "echo LD_PRELOAD=x >> $GITHUB_ENV"])
+def test_no_startup_variable_through_github_env(line: str) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    step = next(s for s in workflow["jobs"]["review"]["steps"] if s.get("name") == "Render the AWF configuration")
+    step["run"] = step["run"] + line + "\n"
+    found = ws.post_sandbox_problems(workflow)
+    assert any("writes $GITHUB_ENV or $GITHUB_PATH and names a startup variable" in p for p in found), found
+
+
 def test_steps_before_the_agent_may_hold_the_token() -> None:
     # 'Fetch trusted files' and 'Prepare the sandbox inputs' use GH_TOKEN before the sandbox runs.
     assert ws.post_sandbox_problems(WORKFLOW) == []
