@@ -931,7 +931,9 @@ def test_a_token_step_must_not_write_step_state(job: str, state_file: str) -> No
     assert any(p.startswith(f"{job}/") and "writes $GITHUB_ENV or $GITHUB_PATH" in p for p in found), found
 
 
-@pytest.mark.parametrize("name", ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "BASH_FUNC_cat%%", "LD_PRELOAD"])
+@pytest.mark.parametrize(
+    "name", ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "BASH_FUNC_cat%%", "LD_PRELOAD", "NODE_OPTIONS"]
+)
 @pytest.mark.parametrize(
     "where", ["workflow", "review", "review/Collect the result", "review-keyless/Fetch trusted files"]
 )
@@ -948,6 +950,22 @@ def test_no_startup_variable_in_the_review_jobs(name: str, where: str) -> None:
     node["env"] = {**(node.get("env") or {}), name: "${{ github.workspace }}/agent-review/out/env.sh"}
     found = ws.post_sandbox_problems(workflow)
     assert any(p.startswith(f"{where}: sets {name!r}") for p in found), found
+
+
+@pytest.mark.parametrize("where", ["workflow", "review", "review-keyless", "review/Fetch trusted files"])
+def test_no_startup_variable_in_a_shell(where: str) -> None:
+    """A default shell reaches the agent step, which runs after the fetch sandbox and holds the key."""
+    workflow = copy.deepcopy(WORKFLOW)
+    shell = "env BASH_ENV=${{ github.workspace }}/agent-review/out/e.sh bash -e {0}"
+    if where == "workflow":
+        workflow["defaults"] = {"run": {"shell": shell}}
+    elif "/" not in where:
+        workflow["jobs"][where]["defaults"] = {"run": {"shell": shell}}
+    else:
+        job, name = where.split("/")
+        next(s for s in workflow["jobs"][job]["steps"] if s.get("name") == name)["shell"] = shell
+    found = ws.post_sandbox_problems(workflow)
+    assert any(p.startswith(f"{where}: shell ") and "names 'BASH_ENV'" in p for p in found), found
 
 
 @pytest.mark.parametrize("line", ['echo "BASH_ENV=${WS}/out/x" >> "$GITHUB_ENV"', "echo LD_PRELOAD=x >> $GITHUB_ENV"])

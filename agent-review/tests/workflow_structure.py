@@ -369,19 +369,32 @@ def secret_refs(value: str) -> list[str]:
 STEP_STATE_FILES = ("GITHUB_ENV", "GITHUB_PATH")
 # Variables that run code before a step's script: bash reads BASH_ENV
 # (and ENV in POSIX mode) despite '--noprofile --norc', SHELLOPTS and
-# BASHOPTS set options, BASH_FUNC_* define functions, LD_* load libraries.
+# BASHOPTS set options, BASH_FUNC_* define functions, LD_* load libraries,
+# NODE_OPTIONS ('--require') loads a module into a JavaScript action.
 STARTUP_VARIABLE = re.compile(
-    r"\b(?:BASH_ENV|ENV|SHELLOPTS|BASHOPTS|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT)\b|\bBASH_FUNC_"
+    r"\b(?:BASH_ENV|ENV|SHELLOPTS|BASHOPTS|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|NODE_OPTIONS)\b|\bBASH_FUNC_"
 )
 
 
 def _startup_problems(where: str, node: Any) -> list[str]:
-    """No 'env:' key in ``node`` is a startup variable (STARTUP_VARIABLE)."""
-    return [
+    """No 'env:' key in ``node`` is a startup variable, and its shell names none.
+
+    ``node`` is the workflow, a job or a step; its shell is 'shell:' or
+    'defaults: run: shell:' ('env BASH_ENV=… bash {0}').
+    """
+    problems = [
         f"{where}: sets {key!r}, which runs code before the step's script"
         for key in (node.get("env") or {})
         if STARTUP_VARIABLE.match(str(key))
     ]
+    shells = [node.get("shell"), ((node.get("defaults") or {}).get("run") or {}).get("shell")]
+    problems += [
+        f"{where}: shell {shell!r} names {match.group(0)!r}, which runs code before the step's script"
+        for shell in shells
+        if isinstance(shell, str)
+        for match in STARTUP_VARIABLE.finditer(shell)
+    ]
+    return problems
 
 
 def _token_problems(where: str, node: Any, path: tuple[str, ...] = ()) -> list[str]:
