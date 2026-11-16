@@ -528,12 +528,12 @@ jobs:
       # No key and no agent: only 'run-review' runs, and git on the PR with
       # hooks, filters and submodules disabled. Its output is prefixed (and
       # carriage returns dropped), so no line can start a workflow command
-      # ('::...::'), NUL bytes are dropped and every '##[' is then broken up
+      # ('::...::'); NUL bytes are dropped and every '##[' is then broken up
       # with a zero-width space, because the runner finds the legacy
-      # '##[command]' anywhere in a line;
-      # no '::stop-commands::', whose token would be printed to the live log
-      # first. 'sudo -E' passes the environment to AWF, which
-      # forwards none of it to the sandbox except what it sets itself.
+      # '##[command]' anywhere in a line. No '::stop-commands::', whose token
+      # would be printed to the live log first. 'sudo -E' passes the
+      # environment to AWF, which forwards none of it to the sandbox except
+      # what it sets itself.
       - &fetch-pr
         name: Fetch the pull request in the sandbox
         id: fetch

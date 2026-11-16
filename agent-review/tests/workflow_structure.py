@@ -1,61 +1,63 @@
 """Structural checks of the agent review workflow and its Python code.
 
-Run through test-workflow-structure.py (the CLI). The checks are functions
-returning a list of problems, so tests/python/test_workflow_structure.py can
-feed them crafted inputs as well as the real files.
+The one complete list of what the structure test enforces; the docs state
+each invariant and point here. Run through test-workflow-structure.py (the
+CLI). The checks are functions returning a list of problems, so
+tests/python/test_workflow_structure.py can feed them crafted inputs as
+well as the real files; the checks marked (CLI) live in the script and run
+against the real workflow only.
 
 Workflow (agent-review.yml, read with YAML aliases resolved, as GitHub
 does):
 
-- only the keyed 'review' job declares an environment;
-- a job without 'environment:' references no secret, except the one boolean
-  check in 'authorize' that the key is not a shared secret;
-- only 'publish' has a write permission;
-- no expression ('${{') inside any 'run:' script, in any workflow file;
-- 'review-keyless' runs the same steps as 'review' except the listed ones;
-- the keyed job's event backstop, concurrency group and per-call artifact
-  names;
-- the collect gate: in each review job, 'Collect the result' runs only if
-  the earlier 'Stop the sandbox' step (id 'teardown') succeeded. Its 'if:'
-  is a plain '&&' chain (no '||', no parentheses except 'always()') with
-  that condition as one term. collect-result's single-link check relies on no sandbox
-  process being alive.
+- jobs and secrets (CLI): only the keyed 'review' job declares an
+  environment; a job without one references no secret ('secret_refs'),
+  except the boolean check in 'authorize' that the key is not a shared
+  secret; only 'publish' has a write permission; no expression ('${{')
+  inside any 'run:' script, in any workflow file; 'review-keyless' runs
+  the same steps as 'review' except the listed ones; the keyed job's event
+  backstop and concurrency group; artifact names carry the call id; only
+  'authorize' reads the 'api_base' input (invariants 1 and 12);
+- host PATH: every step that calls an entry point on the host sets
+  'PATH: /usr/bin:/bin' (host_path_problems);
+- after the sandbox (invariant 3, post_sandbox_problems): the steps after
+  the agent's run, and what they inherit, hold no token or secret
+  reference; no step of the review jobs sets a variable that runs code
+  before a step's script; every 'run:' step uses the fixed shell and
+  PATH; only 'actions/upload-artifact'; the result upload's exact path;
+- sandbox output (invariant 11, sandbox_output_problems): every awf call
+  sends stdout and stderr through the exact filter and nothing else in
+  its step can print; 'diag' is defined once, as one filtered pipeline;
+- the collect gate (collect_gate_problems): 'Collect the result' runs only
+  if 'Stop the sandbox' succeeded, because collect-result's single-link
+  check relies on no sandbox process being alive.
 
-Python (docs/adr/0004-python-runtime.md):
+Python (invariant 13, docs/adr/0004-python-runtime.md):
 
-- call sites: every reference to '<root>/bin/<name>' uses the root allowed
-  for its job and step, names an entry point, and is exactly
+- call sites (call_site_problems, python_word_problems,
+  shell_python_problems): every reference to '<root>/bin/<name>' uses the
+  root allowed for its job and step, names an entry point, and is exactly
   '/usr/bin/python3 -I -S -B <root>/bin/<name>' at the start of a command,
-  with the file named inline, never through a variable (or an existence
-  test, '[ -f "<root>/bin/<name>" ]');
-- no other mention of 'python', no 'pip', no 'setup-python' in
-  agent-review.yml; in the shell files under bin/ and harnesses/, only the
-  Python call form, with the root in 'ar_root' set from the file's path;
-  no Python shebang and no '.py' file outside lib/agent_review/ and tests/;
-- entry points: each file in bin/ is exactly the Python template (all the
-  scripts are ported; a bash script there fails), with mode 100644 (not
-  executable);
-- the tracked tree under agent-review/: no symlink or submodule, no '.pth',
-  '.pyc' or '__pycache__', no 'sitecustomize.py' or 'usercustomize.py';
-  lib/ holds only agent_review/, and that only '.py' files;
-- imports (AST) of lib/ and the Python entry points: only the allowlisted
-  standard-library modules and agent_review.*; no eval/exec/compile/
-  __import__/breakpoint, no os.system/os.popen/os.exec*/os.spawn*/fork
-  (nor 'import os as ...' or 'import *', which would hide them);
-  subprocess only in agent_review/runner.py; no 'shell=' argument anywhere;
-- token reach: only the 'authorize' and 'publish-comment' entry points can
-  import agent_review.gh; only gh.py names the 'gh' program (by basename)
-  and uses the trusted-host zone (see 'trust zones' below). The token
-  itself is in a step's env, which the workflow decides; this keeps the
-  code that runs there narrow.
-- indirect access: no getattr/setattr/delattr on an imported module or an
-  attribute of one (except sys.flags), nor those three used as values, no module used as a value ('x = os';
-  not checked in probe.py, which lists its imports), no globals()/vars()/locals(), no
-  sys.modules (except the probe), no standard-library module imported
-  through agent_review.*;
-- trust zones: only gh.py names the trusted-host zone, only run_review.py
-  and sandbox_git.py the sandbox zone, and no module but runner.py the
-  tainted-host zone (collect-result starts no process).
+  with the file named inline; no other Python, 'pip' or 'setup-python' in
+  agent-review.yml; shell files under bin/ and harnesses/ call Python only
+  in that form, with the root from 'ar_root_line';
+- entry points (entry_problems): each file in bin/ is exactly the template,
+  mode 100644 (not executable), with a module that defines main();
+- the tree (tree_problems, shebang_problems): no symlink or submodule, no
+  '.pth', '.pyc' or '__pycache__', no '*customize.py'; lib/ holds only
+  agent_review/, and that only '.py' files; no '.py' file or Python
+  shebang outside lib/agent_review/ and tests/;
+- imports and calls (ast_problems): only STDLIB_ALLOWED and agent_review.*;
+  none of BANNED_CALLS or BANNED_OS; subprocess only in runner.py; no
+  'shell=' argument; no aliased or star import; no getattr, setattr or
+  delattr on a module or an attribute of one (except GETATTR_ALLOWED), nor
+  those three used as values; no module used as a value and no
+  sys.modules (except the probe); no standard-library module imported
+  through agent_review.*; each trust zone named only by ZONE_ALLOWED;
+- token reach (token_reach_problems): only the 'authorize' and
+  'publish-comment' entry points can import agent_review.gh, and only
+  gh.py names the 'gh' program. The token itself is in a step's env,
+  which the workflow decides; this keeps the code that runs there narrow.
 """
 
 import ast
@@ -112,7 +114,7 @@ def render_entry(name: str) -> str:
 
 
 def entry_kind(name: str, text: str) -> str | None:
-    """'python' for exactly the template, else None (fail closed; bin/ holds no bash any more)."""
+    """'python' for exactly the template, else None: anything else in bin/ fails closed."""
     first = text.split("\n", 1)[0]
     if first == PYTHON_MARKER and text == render_entry(name):
         return "python"

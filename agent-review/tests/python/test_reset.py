@@ -1,4 +1,4 @@
-"""agent_review.reset: configuration, coverage by git pathspecs, the reset and its post-condition (S4)."""
+"""agent_review.reset: configuration, coverage by git pathspecs, the reset and its post-conditions."""
 
 import os
 import pathlib
@@ -209,7 +209,7 @@ def test_load_config_checks_rule_files_first(tmp_path: pathlib.Path) -> None:
         (["docs/style/"], "a/docs/style/b/c.md", True),
         (["docs/style/"], "docs/style.md", False),
         (["sub/*.md"], "src/pkg/sub/AGENTS.md", True),
-        # '*' does not cross '/' (bash's matching said it did: finding S4).
+        # '*' does not cross '/' in git's glob pathspecs: no coverage at that depth.
         (["pkg/*.md"], "src/pkg/sub/AGENTS.md", False),
         (["**/*.md"], "a/b/c.md", True),
         ([".github/copilot-instructions.md"], ".github/copilot-instructions.md", True),
@@ -240,7 +240,7 @@ def test_check_coverage_messages(tmp_path: pathlib.Path) -> None:
         reset.check_coverage(config(("AGENTS.md", "style.md")), str(tmp_path), {})
     with pytest.raises(Fatal, match=r"names 'docs/\*\.md', which is not a plain repository path\."):
         reset.check_coverage(config(("docs/*.md",)), str(tmp_path), {})
-    # In order: the first problem is reported, as the bash loop did.
+    # In order: the first problem is the one reported.
     with pytest.raises(Fatal, match=re.escape("'a.md', which no reset pattern covers")):
         reset.check_coverage(config(("a.md", "b/*.md")), str(tmp_path), {})
     # A path git refuses in an index ('Ignoring path') is not covered: fails closed.
@@ -311,7 +311,7 @@ def test_reset_restores_a_base_file_under_a_pr_symlink(pr: PR) -> None:
     assert "1 rule file(s)" in pr.verify(["docs/RULES.md"])
 
 
-# --- The post-condition (S4 regressions: the reset bypassed or subverted) -----------
+# --- The post-condition, with the reset bypassed or subverted ---------------------
 
 
 def test_post_condition_file_left_at_the_pr_version(pr: PR) -> None:
@@ -323,8 +323,8 @@ def test_post_condition_file_left_at_the_pr_version(pr: PR) -> None:
 
 
 def test_post_condition_pattern_that_misses_the_file(pr: PR) -> None:
-    # The S4 scenario: a pattern that does not match at that depth leaves
-    # the PR's added file in place.
+    # A pattern that does not match at that depth leaves the PR's added
+    # file in place; the post-condition must catch it.
     pr.make(BASE, {"src/pkg/sub/AGENTS.md": "PR\n"})
     pr.reset(["CLAUDE.md", "pkg/*.md"])
     with pytest.raises(Fatal, match="is not in the base commit but is in the checkout: the reset missed it"):
@@ -397,7 +397,7 @@ def test_post_condition_executable_bit_and_directories(pr: PR) -> None:
 
 
 def test_post_condition_unusual_path(pr: PR) -> None:
-    # 'ls-tree' quotes such names without '-z'; the bash version compared the quoted form.
+    # 'ls-tree' quotes such names without '-z', so the comparison must use '-z'.
     name = 'r\u00e9gles "x".md'
     pr.make({name: "base\n"}, {name: "PR\n"})
     with pytest.raises(Fatal, match="is not its base version"):

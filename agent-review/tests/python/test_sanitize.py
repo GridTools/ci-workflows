@@ -60,7 +60,7 @@ def test_every_code_point_against_the_oracle() -> None:
 
 
 def test_ranges_beyond_cf_are_dropped() -> None:
-    # Advisor finding 5: Cf alone would keep these.
+    # Variation selectors (Mn) and unassigned code points (Cn): Cf alone would keep these.
     for c in ("\ufe0f", "\U000e0100", "\U000e01ef", "\U000e01ff", "\u2065", "\ufe00"):
         assert unicodedata.category(c) != "Cf"
         assert sanitize.drop_invisible(f"a{c}b") == "ab"

@@ -33,10 +33,6 @@ The invisible characters go first, so removing them cannot join a delimiter
 that a later replacement would miss (``<`` U+200B ``!--``). The later
 replacements cannot create new matches: none inserts ``<``, ``>``, ``&``,
 ``]`` or ``@``, and the named-reference rule runs before the numeric one.
-The order and the later replacements are those of the bash version this
-replaces; the deliberate differences are the ``Cf`` drop, ``<`` before an
-ASCII letter or ``/`` (bash: only ``!`` and ``?``) and the cut that never
-splits a neutralisation.
 
 Pure functions on bytes and text: this module runs no program and has no
 token (its import closure excludes ``agent_review.gh``).
@@ -49,9 +45,8 @@ REVIEW_MAX_BYTES = 60000
 ZWSP = "\u200b"  # zero-width space
 ZWJ = "\u200d"  # zero-width joiner
 
-# Inclusive code point ranges, as the bash version's UTF-8 byte patterns
-# matched them (U+E0100-U+E01FF: the byte pattern covers the whole block,
-# not only the selectors up to U+E01EF).
+# Inclusive code point ranges. U+E0100-U+E01FF is the whole block, not only
+# the selectors up to U+E01EF, so its unassigned code points go too.
 INVISIBLE: tuple[tuple[int, int], ...] = (
     (0x00AD, 0x00AD),  # soft hyphen
     (0x061C, 0x061C),  # Arabic letter mark
@@ -71,7 +66,7 @@ _DROPPED_BY_RANGE = re.compile(
     "[" + "".join(f"\\U{lo:08x}-\\U{hi:08x}" for lo, hi in (*CONTROLS, *INVISIBLE)) + "]", re.ASCII
 )
 
-# The replacements, in the order of the bash version's 'sed' chain.
+# The replacements, applied in the order the module docstring gives.
 # The start of every raw HTML construct in GitHub's Markdown.
 _HTML_START = re.compile(r"<([A-Za-z/!?])", re.ASCII)
 _MENTION = re.compile(r"@([A-Za-z0-9])", re.ASCII)

@@ -1,6 +1,6 @@
-"""Validation helpers that behave like bash's ``[[ =~ ^...$ ]]`` checks.
+"""Validation helpers: a value matches its pattern as a whole, in ASCII only.
 
-Python's defaults accept more than bash does:
+Python's defaults accept more than these checks mean to:
 
 - ``re.match(r'^[0-9a-f]{4}$', 'abcd\\n')`` matches (``$`` before a final
   newline), so patterns are only ever applied with ``re.fullmatch``;
@@ -10,8 +10,7 @@ Python's defaults accept more than bash does:
   whitespace (``int(' 1_0\\n')`` is 10), so numbers are matched against a
   pattern first (``parse_int``).
 
-Patterns shared by several entry points are defined here, with the bash
-patterns they mirror.
+Patterns shared by several entry points are defined here.
 """
 
 import re
@@ -56,15 +55,10 @@ def parse_int(value: str, what: str, *, digits: re.Pattern[str] | None = None, m
 
 
 DIGITS = pattern(r"[0-9]{1,10}")
-# bash: ^[1-9][0-9]{0,9}$ (pull request numbers)
+# Pull request numbers: no leading zero.
 POSITIVE_INT = pattern(r"[1-9][0-9]{0,9}")
-# bash: ^[0-9a-f]{40}$
 SHA = pattern(r"[0-9a-f]{40}")
-# bash: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
 REPO = pattern(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-# bash: ^[a-z][a-z0-9-]{0,31}$
 HARNESS = pattern(r"[a-z][a-z0-9-]{0,31}")
-# bash: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$
 MODEL = pattern(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
-# bash: ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,63}$
 PROJECT = pattern(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,63}")

@@ -9,9 +9,9 @@
   that starts with neither whitespace nor ``:`` (the runner trims leading
   whitespace, including non-breaking spaces, before matching ``::``), NUL
   characters are dropped, and every ``##[`` is then broken up with a
-  zero-width space, because the runner's
-  legacy parser finds ``##[command]`` anywhere in a line. It never uses
-  ``::stop-commands::``, whose token would be printed to the live log first.
+  zero-width space, because the runner's legacy parser finds
+  ``##[command]`` anywhere in a line. It never uses ``::stop-commands::``,
+  whose token would be printed to the live log first.
 
 Everything is written as strict UTF-8 bytes, never in the locale's
 encoding.

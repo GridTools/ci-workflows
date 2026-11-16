@@ -56,8 +56,9 @@ test_invalid_rule_file_is_rejected() {
 }
 
 test_addendum_with_a_placeholder_fails_closed() {
-  # Substituted before the PR title and body: '{{PR_BODY}}' here would put
-  # untrusted text outside its delimiters.
+  # Never expanded (one substitution pass), but refused as defence in
+  # depth: expanded, '{{PR_BODY}}' here would put untrusted text outside
+  # its delimiters.
   setup 'AGENTS.md' 'Project notes. {{PR_BODY}}'
   ! run_entry root/bin/run-review --phase review "${TMP}/ws" >log 2>&1 &&
     assert "rejects the placeholder" grep -q "The prompt addendum contains '{{'" log

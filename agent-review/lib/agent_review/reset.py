@@ -9,9 +9,10 @@ the base commit are restored (the PR's own versions stay as data).
 git, through the pathspec ``:(glob,icase)**/<pattern>`` (``**`` appended
 for a directory pattern ending in ``/``): in the reset, and in the
 pre-fetch check that a reset pattern covers every file the prompt addendum
-names. Nothing here matches globs in Python. The bash version checked
-coverage with bash's own matching, where ``*`` crosses ``/``, so a pattern
-could look like it covered a file that the reset then missed (finding S4).
+names. Nothing here matches globs in Python: a second matcher would
+disagree with git somewhere (a shell glob's ``*`` crosses ``/``, git's
+does not), and a pattern could then look like it covered a file that the
+reset misses.
 
 **Scratch index.** ``git ls-files`` matches pathspecs against an index, and
 the coverage check runs before anything is fetched. ``Coverage`` therefore
@@ -21,11 +22,13 @@ creates a scratch bare repository in a temporary directory in the workspace
 which need not exist; one index per path, so that two named paths cannot
 conflict as file and directory. The directory is removed afterwards.
 
-**Post-condition (S4).** Whatever the matching does, after the reset every
+**Post-conditions.** Whatever the matching does, after the reset every
 file the prompt tells the agent to follow (each rule file, and each file
 the addendum names, as a path from the repository root) must be its base
 version, or absent in both the base and the checkout, and no leading
-directory may be a symlink (``verify_followed_files``).
+directory may be a symlink (``verify_followed_files``); and no symlink or
+gitlink may leave files the reset does not cover reachable
+(``verify_no_linked_directories``).
 """
 
 import os
@@ -40,13 +43,13 @@ from agent_review import files, runner
 from agent_review.review_errors import Fatal
 from agent_review.sandbox_git import Git
 
-# Caps on the trusted configuration files (the bash version read them whole).
+# Caps on the trusted configuration files, so a broken one cannot exhaust memory.
 LIST_MAX_BYTES = 1 << 20
 ADDENDUM_MAX_BYTES = 1 << 20
 TEMPLATE_MAX_BYTES = 1 << 20
-# bash's [[:space:]] in the C locale.
+# The whitespace trimmed from each list line: ASCII only, the lists are bytes.
 ASCII_SPACE = b" \t\n\v\f\r"
-# grep -oE '`[^`[:space:]]+\.(md|mdc|txt|toml|ya?ml|json|jsonc)`', on bytes.
+# A file the addendum names: a path in backticks, without whitespace, with one of these extensions.
 NAMED_FILE = re.compile(rb"`[^`\s]+\.(?:md|mdc|txt|toml|ya?ml|json|jsonc)`", re.ASCII)
 EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 CONTEXT_NAME = ".agent-review-context"
@@ -104,7 +107,7 @@ def check_entry(entry: str) -> None:
 
 
 def is_tree_path(path: str) -> bool:
-    """bash: case "/${path}/" in */../* | */./* | *//*) (not a path git writes)."""
+    """Whether ``path`` has no '.', '..' or empty component: git never writes such a path."""
     wrapped = f"/{path}/"
     return not ("/../" in wrapped or "/./" in wrapped or "//" in wrapped)
 
@@ -150,10 +153,12 @@ def load_config(root: str) -> Config:
     addendum_path = os.path.join(config_dir, "prompt-addendum.md")
     if os.path.isfile(addendum_path) and os.path.getsize(addendum_path) > 0:
         addendum = read_config_file(addendum_path, ADDENDUM_MAX_BYTES)
-        # Strict UTF-8 first, and the check on the decoded text: invalid
-        # bytes between two braces ('{\xff{') would otherwise pass the check
-        # and be dropped when the addendum is clipped into the prompt,
-        # forming a placeholder there.
+        # The prompt is rendered in one pass, so a placeholder here is never
+        # expanded; refusing it is defence in depth (expanded, '{{PR_BODY}}'
+        # would put untrusted text outside its delimiters) and tells the
+        # caller early. The check runs on strictly decoded text: invalid
+        # bytes between two braces ('{\xff{') are dropped when the addendum
+        # is clipped into the prompt, and would form '{{' there.
         text = _decode(addendum, addendum_path)
         if "{{" in text:
             raise Fatal("The prompt addendum contains '{{'; placeholders are not allowed there.")
@@ -407,8 +412,8 @@ def _is_base_gitlink(git: Git, repo_dir: str, base_sha: str, path: str) -> bool:
 
     Such a submodule is harmless: submodules are never fetched
     (``submodule.recurse=false``), so its directory is empty. A PR's added
-    or changed gitlink is replaced by the reset (layer a); if one remained,
-    its commit would differ from the base's.
+    or changed gitlink is replaced by the reset itself; if the reset left
+    one, its commit would differ from the base's, and this check fails.
     """
     base = _parse_ls_tree(git.output("ls-tree", "-z", "--full-tree", base_sha, "--", path))
     if base is None or base[:2] != ("160000", "commit") or base[3] != path:
@@ -496,32 +501,46 @@ def verify_no_linked_directories(
 ) -> None:
     """Fails closed on a symlink or a gitlink that could expose files the reset does not cover.
 
-    The post-condition of the reset for links, checked on the result: at
-    any depth and case-insensitively, a path that a reset pattern matches
+    The post-condition of the reset for links, checked on its result, and
+    the full statement of the rule (docs/agent-review.md, invariant 6,
+    points here). Matching is git's (scratch indexes), at any depth and
+    case-insensitively.
+
+    No gitlink and no symlink may stand at a path a reset pattern matches
     (an instruction file, a rule file, or anything below a directory
-    pattern), a directory pattern's directory itself, or a directory a
-    pattern goes through, must not be a gitlink, nor a symlink, with one
-    exception, for bases that link one instruction file or directory to
-    another ('.claude/skills -> ../.agents/skills', 'AGENTS.md ->
-    CLAUDE.md'): a symlink passes if (1) it is the base's own (same target
-    as in the base commit), (2) its target is relative, climbs only through
-    leading '..' and stays inside the repository, (3) every symlink on the
-    way to the target passes (1) and (2) as well, at most MAX_LINK_HOPS of
-    them and without a cycle, and (4) the reset covers the real path it
-    leads to: a file must match a reset pattern itself; a directory must be
-    a directory pattern's directory or lie below one (never merely a
-    directory a file pattern goes through, whose other files are not
-    reset). A base symlink that only stands where a pattern expects a
-    directory on the way (``container_specs``, not matched by a pattern
-    itself) and that leads to a regular file, or to nothing (the pull request
-    deleted the target, or the base never had it), passes as well: no
-    instruction file can lie below it, and wildcard patterns
-    ('docs/*/RULES.md') would otherwise refuse every such link
-    ('docs/logo.png -> ../assets/logo.png'). A PR's symlink never qualifies (the reset replaces it), and a
-    base symlink to anything else would let the agent read files the PR
-    changes. A gitlink passes only if it is the base commit's own (same
-    path, same commit) and its directory is empty (``_is_base_gitlink``).
-    Matching is git's (scratch indexes).
+    pattern), at a directory pattern's directory, or at a directory a
+    pattern goes through. Otherwise the agent could read, through the
+    link, files the reset never touched. Exceptions:
+
+    - A gitlink that is the base commit's own (same path, same commit)
+      with an empty directory (``_is_base_gitlink``): submodules are never
+      fetched, so nothing is below it.
+    - A symlink of the base that links one instruction file or directory to
+      another ('.claude/skills -> ../.agents/skills', 'AGENTS.md ->
+      CLAUDE.md'), if:
+
+      1. it is the base's own, with the same target as in the base commit
+         (a PR's symlink never qualifies: the reset replaces it);
+      2. its target is relative, climbs only through leading '..' and
+         stays inside the repository;
+      3. every symlink on the way to the target meets 1 and 2 as well, at
+         most MAX_LINK_HOPS of them and without a cycle;
+      4. the reset covers the real path it leads to: a file must match a
+         reset pattern itself; a directory must be a directory pattern's
+         directory or lie below one, never merely a directory a file
+         pattern goes through, whose other files are not reset.
+
+    - A base symlink that stands only where a pattern expects a directory
+      on the way (``container_specs``; not matched by a pattern itself) and
+      leads to a regular file or to nothing (the pull request deleted the
+      target, or the base never had it): no instruction file can lie below
+      it, and wildcard patterns ('docs/*/RULES.md') would otherwise refuse
+      every such link ('docs/logo.png -> ../assets/logo.png'). It must
+      still meet 1 to 3.
+
+    Any other base symlink would let the agent read files the PR changes.
+    The error names the first refused link, with its target or the reason it
+    was refused, and how many were refused.
     """
     linked = _linked_paths(git, repo_dir)
     if not linked:
@@ -602,7 +621,7 @@ def verify_followed_files(
             if os.path.islink(os.path.join(repo_dir, parent)):
                 raise Fatal(f"Followed file '{path}': '{parent}' is a symlink in the checkout.")
         checkout_path = os.path.join(repo_dir, path)
-        # '-z': no quoting of unusual paths, which the bash version compared quoted.
+        # '-z': the path comes back unquoted, so it compares with ``path`` as is.
         entry = _parse_ls_tree(git.output("ls-tree", "-z", "--full-tree", base_sha, "--", path))
         if entry is None:
             if os.path.lexists(checkout_path):

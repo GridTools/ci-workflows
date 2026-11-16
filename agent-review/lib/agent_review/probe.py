@@ -8,10 +8,16 @@ Prints one line, so the self-test can compare the host and the AWF sandbox:
 (one line in the output). ``site=0``: neither ``site`` nor
 ``sitecustomize`` is loaded. ``stdlib_only=1``: ``sys.path`` holds the
 trusted ``lib`` and the standard library's own entries only, and ``json``
-and this package were loaded from them. It imports the package's modules
-except ``gh``, to show that their standard-library imports resolve where it
-runs. The stub harness runs it on the host (``install.sh``, in ``prepare``)
-and in the sandbox (``run.sh``).
+and this package were loaded from them.
+
+It imports the shared modules the entry points build on (``files``,
+``runner``, ``validate``, ``workflow``), so the self-test shows that their
+standard-library imports (``subprocess``, ``selectors``, ``stat``, ...)
+resolve under these flags on both sides. Not ``gh``: only the
+``authorize`` and ``publish-comment`` entry points may reach the module
+that runs the token-holding program (the structure test's token-reach
+check). The stub harness runs it on the host (``install.sh``, in
+``prepare``) and in the sandbox (``run.sh``).
 """
 
 import json
@@ -21,7 +27,7 @@ import sys
 import agent_review
 from agent_review import files, runner, validate, workflow
 
-# Imported only to show that they import here; never 'gh'.
+# Imported only to show that they import here (see the module docstring).
 MODULES = (files, runner, validate, workflow)
 FLAGS = ("isolated", "ignore_environment", "no_user_site", "no_site", "dont_write_bytecode", "safe_path")
 

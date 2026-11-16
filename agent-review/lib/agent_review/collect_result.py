@@ -9,13 +9,13 @@ process and reads nothing from the environment; it only opens files, and
 every open is relative to a directory descriptor, with ``O_NOFOLLOW``:
 
 - ``<out-dir>`` must be an absolute path without ``.``, ``..``, empty
-  components or a trailing slash (the bash version compared it with its
-  ``realpath``). It is opened one component at a time from ``/``, each a
+  components or a trailing slash, so that the path walked is the path
+  given. It is opened one component at a time from ``/``, each a
   directory and none a symlink, and is then used only through that
   descriptor: swapping it or a parent for a symlink afterwards changes
   nothing. The walk uses ``O_PATH`` descriptors, which need only search
-  permission, as bash's path lookup did (a search-only ``0311`` workspace
-  still works).
+  permission, like an ordinary path lookup (a search-only ``0311``
+  workspace still works).
 - Only ``review.md`` and ``meta.json`` are copied, each only if it is a
   regular file with a single link, at most ``MAX_BYTES``. The type is
   checked with ``lstat`` first, so a FIFO or a device found there is not

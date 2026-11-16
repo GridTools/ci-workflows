@@ -11,10 +11,9 @@ BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)
 PYTHON_ENTRY_MARKER="# agent-review Python entry point: run only as '/usr/bin/python3 -I -S -B <root>/bin/<name>'."
 
 # Sets ENTRY_CMD to the production command line of a bin/ entry point,
-# '/usr/bin/python3 -I -S -B <file>'; a file without the Python entry-point
-# marker is an error (workflow_structure.py checks the rest of the
-# template). Builtins and absolute paths only: some tests put fake tools
-# first on PATH.
+# '/usr/bin/python3 -I -S -B <file>'; a file without the marker above is an
+# error. Builtins and absolute paths only: some tests put fake tools first
+# on PATH.
 entry_command() { # file
   local first=""
   IFS= read -r first <"$1" || [ -n "${first}" ] || {

@@ -9,7 +9,8 @@ refused, no submodule recursion and no external diff (``SAFE_CONFIG``):
 ``.git`` could otherwise be influenced by repository content.
 
 ``GIT_ENV`` is part of the run's environment, which the harness inherits
-too (the bash version exported it). Commands run in the sandbox zone: git
+too, so the harness's own git calls get the same settings. Commands run in
+the sandbox zone: git
 is found on ``PATH`` and the environment is inherited, so an inherited
 ``GIT_ALLOW_PROTOCOL`` reaches git (the offline test of the review phase
 relies on it).
@@ -78,7 +79,7 @@ class Git:
         return self.run(*args, env=env, stdin=stdin).stdout
 
     def line(self, *args: str, quiet: bool = False) -> str | None:
-        """The output without its trailing newlines, as ``$(git ...)``; None if git fails."""
+        """The output without its trailing newlines; None if git fails."""
         result = self.run(*args, quiet=quiet, check=False)
         if result.returncode != 0:
             return None

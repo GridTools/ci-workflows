@@ -15,7 +15,7 @@ exit 1); a denied actor or an event that is not for us is a notice
 
 Environment (all from the workflow; ``IN_*`` are the caller's inputs, which
 come from the caller's workflow file); an unset variable is the same as an
-empty one, as in bash's ``${!v-}``:
+empty one:
 
 - ``REPO EVENT ACTION AUTHOR SENDER ACTOR EVENT_PR EVENT_HEAD_SHA
   EVENT_BASE_SHA EVENT_DRAFT EVENT_LABEL``: the github context and the event
@@ -39,12 +39,11 @@ Event and harness matrix ('keyed' harnesses call a model with the key):
 - ``push``, ``schedule``: ``stub`` only, forced dry run, no writer check;
   the self-test of the workflow's own repository only.
 
-Ported from bash; the checks run in the bash order, so the same input
-gives the same first error. Where bash depended on the locale or on shell
-quirks, this module takes the stricter reading (docs/agent-review.md,
-"Inputs"): ASCII-only classes and whitespace (bash's C locale), values that
-are not UTF-8 are rejected, and ``gh`` output is compared byte for byte
-(no NUL dropped, nothing on stderr).
+The checks run in a fixed order, which tests/test-authorize.sh pins, so
+the same input always stops at the same first error. Values are read
+strictly (docs/agent-review.md, "Inputs"): ASCII-only classes and
+whitespace, values that are not UTF-8 are rejected, and ``gh`` output is
+compared byte for byte (no NUL dropped, nothing on stderr).
 """
 
 import os
@@ -107,25 +106,20 @@ PR_ACTIONS_BY_AUTHOR = ("opened", "reopened", "ready_for_review")
 STUB_EVENTS = ("pull_request", "push", "schedule")
 WRITER_LEVELS = ("admin", "write")
 
-# bash's [:space:] in the C locale. Never str.strip() without arguments, which
-# also removes Unicode spaces and \x1c-\x1f.
+# ASCII whitespace. Never str.strip() without arguments, which also removes
+# Unicode spaces and \x1c-\x1f, so an entry padded with them would pass.
 SPACE = " \t\n\v\f\r"
-# The separators of 'read' with the default IFS, within one line.
+# What separates two fields on one line: blanks, not CR, VT or FF.
 IFS_BLANKS = " \t"
 API_BASES_FILE = "api-bases.txt"
 API_BASES_MAX_BYTES = 64 * 1024
 
-# The bash patterns, applied with fullmatch and ASCII classes.
-# ^[A-Za-z0-9][A-Za-z0-9\ ._:/-]{0,49}$
+# Applied with fullmatch and ASCII classes (validate.pattern).
 LABEL = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,49}")
-# ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$
 ENVIRONMENT = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
-# ^[1-9][0-9]{0,3}$
 CAP = validate.pattern(r"[1-9][0-9]{0,3}")
-# ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$
 ACTOR = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?")
-# ^[A-Za-z0-9_.][A-Za-z0-9_./-]{0,199}$ and, for patterns,
-# ^[A-Za-z0-9_.*][A-Za-z0-9_.*/-]{0,199}$
+# A plain path, and a pattern, which may also hold '*'.
 PLAIN_PATH = validate.pattern(r"[A-Za-z0-9_.][A-Za-z0-9_./-]{0,199}")
 GLOB_PATH = validate.pattern(r"[A-Za-z0-9_.*][A-Za-z0-9_.*/-]{0,199}")
 REPO = validate.REPO
@@ -158,10 +152,10 @@ class Skip(Exception):
 
 
 def read_environment(environb: Mapping[bytes, bytes]) -> dict[str, str]:
-    """The variables of VARIABLES as strict UTF-8; unset is empty (``${!v-}``).
+    """The variables of VARIABLES as strict UTF-8; unset is empty.
 
-    Bash compared bytes; values that are not UTF-8 cannot come from the
-    workflow (its contexts are JSON strings), so they are rejected here.
+    Values that are not UTF-8 cannot come from the workflow (its contexts
+    are JSON strings), so they are rejected here.
     """
     env = {}
     for name in VARIABLES:
@@ -173,40 +167,43 @@ def read_environment(environb: Mapping[bytes, bytes]) -> dict[str, str]:
     return env
 
 
-# --- Shell semantics, emulated exactly -------------------------------------------
+# --- Splitting inputs and command output -------------------------------------------
+#
+# Exact rules, pinned by tests/test-authorize.sh: what counts as a line, a
+# blank or a separator decides which entries are checked.
 
 
 def trim(text: str) -> str:
-    """``${v#"${v%%[![:space:]]*}"}`` and its mirror, in the C locale."""
+    """``text`` without ASCII whitespace at either end (see SPACE)."""
     return text.strip(SPACE)
 
 
 def heredoc_lines(text: str) -> list[str]:
-    """The lines ``while IFS= read -r line; do ...; done <<<"$text"`` reads.
+    """The lines of a multi-line input, the last one too.
 
-    The here-string appends a newline, so every line is read, the last one
-    too; only LF separates lines (a CR stays part of its line).
+    Only LF separates lines: a CR stays part of its line, where the entry's
+    pattern rejects it.
     """
     return text.split("\n")
 
 
 def count_nonempty_lines(text: str) -> int:
-    """``grep -c . <<<"$text"``: lines with at least one character."""
+    """The number of lines with at least one character."""
     return sum(1 for line in text.split("\n") if line)
 
 
 def command_output(stdout: bytes) -> str:
-    """``$(...)`` of a command's stdout: trailing newlines removed.
+    """A command's stdout as text, without trailing newlines.
 
-    Unlike bash, NUL bytes are kept (bash drops them with a warning), so a
-    value with a NUL never compares equal to a valid one. Bytes that are not
-    UTF-8 become U+FFFD, which no pattern or allowed value contains.
+    NUL bytes are kept, so a value with a NUL never compares equal to a
+    valid one. Bytes that are not UTF-8 become U+FFFD, which no pattern or
+    allowed value contains.
     """
     return stdout.decode("utf-8", errors="replace").rstrip("\n")
 
 
 def read_two_fields(text: str) -> tuple[str, str]:
-    """``read -r a b <<<"$text"`` with the default IFS.
+    """Two blank-separated fields of ``text``.
 
     The first line only; leading and trailing blanks (space, tab) removed;
     ``a`` is the first field, ``b`` the rest of the line. Other whitespace
@@ -318,7 +315,7 @@ def choose_api_base(value: str, allowed: Sequence[str]) -> str:
 
 
 def _gh_message(e: Exception) -> str:
-    """What bash's '$(gh ... 2>&1)' showed of a failure, as far as known."""
+    """What to show of a failed ``gh`` call: its stderr, else the error."""
     if isinstance(e, runner.CommandError) and e.stderr:
         return command_output(e.stderr)
     return str(e)
@@ -354,8 +351,8 @@ def decide(
 ) -> list[tuple[str, str]]:
     """The outputs of an allowed run, in order; raises Fail or Skip.
 
-    The checks run in the order of the bash script, so that the same input
-    stops at the same check.
+    The checks run in a fixed order, which tests/test-authorize.sh pins, so
+    that the same input stops at the same check.
     """
     # This workflow's own commit, from which every trusted file is read.
     trusted_repo, trusted_sha, repo = env["TRUSTED_REPO"], env["TRUSTED_SHA"], env["REPO"]

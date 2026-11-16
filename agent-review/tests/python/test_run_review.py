@@ -668,7 +668,7 @@ def test_truncation_is_decided_from_the_bytes_read(tmp_path: pathlib.Path, monke
     assert review.endswith(run_review.TRUNCATION_NOTE)
 
 
-# --- Base symlinks to paths the reset does not cover (integration review F1, F2) ---------------
+# --- Base symlinks to paths the reset does not cover ---------------------------------------------
 
 UNCOVERED = "which the reset does not cover, so the agent would read the pull request's version"
 
@@ -683,7 +683,7 @@ def assert_stopped(ws: pathlib.Path, log: str) -> None:
 @pytest.mark.parametrize(
     ("fork", "head", "root_args", "message"),
     [
-        # F2: a directory link whose target is only a directory a FILE pattern
+        # A directory link whose target is only a directory a FILE pattern
         # goes through ('.github' for '.github/copilot-instructions.md'): the
         # files below it other than that one are not reset.
         (
@@ -718,7 +718,7 @@ def assert_stopped(ws: pathlib.Path, log: str) -> None:
             {"extra": "guides/*/README.md\n"},
             UNCOVERED,
         ),
-        # F1: a base symlink matched by a FILE pattern, to a file no pattern
+        # A base symlink matched by a FILE pattern, to a file no pattern
         # resets, which the PR edits.
         (
             {"CONTRIBUTING.md": "base contrib\n", "AGENTS.md": "-> CONTRIBUTING.md"},
@@ -738,7 +738,7 @@ def assert_stopped(ws: pathlib.Path, log: str) -> None:
             {},
             "'.github/copilot-instructions.md' is a symlink in the base commit to 'docs/c.md', " + UNCOVERED,
         ),
-        # A rule file that is a base symlink: the S4 post-condition holds (the
+        # A rule file that is a base symlink: the followed-files post-condition holds (the
         # link is its base version), the content would be the PR's.
         (
             {"docs/guide.md": "base\n", "docs/RULES.md": "-> guide.md"},
@@ -890,7 +890,7 @@ def test_base_link_through_a_file_is_refused_with_its_reason(
     assert "Not a directory" not in log, log
 
 
-# --- The central reset list (final security review R1) ------------------------------------------
+# --- The central reset list: missing or empty fails closed ---------------------------------------
 
 
 @pytest.mark.parametrize("central", [None, "", "# comments only\n\n   \n"])
@@ -911,7 +911,7 @@ def test_missing_or_empty_central_list_fails_closed(
     assert not (ws / "prompt.md").exists()
 
 
-# --- Base submodules at instruction directories (final security review R2) -------------------
+# --- Base submodules at instruction directories --------------------------------------------------
 
 BASE_GITLINK = {**FORK, ".agents/skills/s/SKILL.md": "base skill\n", ".claude/skills/x": "gitlink " + "2" * 40}
 
@@ -950,7 +950,7 @@ def test_pr_changed_gitlink_is_reset_to_the_base_commit(tmp_path: pathlib.Path, 
 def test_pr_gitlink_with_the_reset_subverted_fails_closed(
     tmp_path: pathlib.Path, upstream: Upstream, fork: dict[str, str], head: dict[str, str | None]
 ) -> None:
-    """Layer b: if the reset left the PR's gitlink, it is not the base's own, and the fetch stops."""
+    """The link post-condition: if the reset left the PR's gitlink, it is not the base's own, and the fetch stops."""
     _, base_sha, head_sha = upstream.make(fork, {}, head)
     root = make_root(tmp_path / "root")
     ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
@@ -962,7 +962,7 @@ def test_pr_gitlink_with_the_reset_subverted_fails_closed(
     assert not (ws / "prompt.md").exists()
 
 
-# --- Link spellings and refusal reasons (final security review R3) ---------------------------
+# --- Link spellings and refusal reasons ----------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1039,7 +1039,7 @@ def test_refusal_reason_for_an_uncovered_target(tmp_path: pathlib.Path, upstream
     assert "add 'skills/' to instruction_files" in log, log
 
 
-# --- The PR's .gitattributes and the restored files (final security review R5) ----------------
+# --- The PR's .gitattributes and the restored files ----------------------------------------------
 
 
 # The PR's own file in the encoding its attributes declare (git add decodes it).

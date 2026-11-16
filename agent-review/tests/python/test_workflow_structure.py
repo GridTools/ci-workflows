@@ -100,7 +100,7 @@ def test_fixture_passes() -> None:
 @pytest.mark.parametrize(
     ("old", "new"),
     [
-        # The bash-era call forms, each now a failure.
+        # Calls that run an entry point with bash instead of the Python command line.
         (CALLS["authorize"], f'bash {TRUSTED}authorize"'),
         (CALLS["run-review"], f"-- {OPT}run-review --phase fetch"),
         (CALLS["collect-result"], f"/usr/bin/bash {OPT}collect-result"),
@@ -110,7 +110,7 @@ def test_fixture_passes() -> None:
         ),
     ],
 )
-def test_bash_era_call_forms_fail(old: str, new: str) -> None:
+def test_bash_call_forms_fail(old: str, new: str) -> None:
     workflow = fixture()
     assert edit_runs(workflow, old, new)
     found = ws.call_site_problems(workflow, kinds())
@@ -774,7 +774,7 @@ def test_awf_steps_are_exempt_and_a_missing_host_step_fails() -> None:
     assert ws.host_path_problems(workflow) == ["authorize/Authorize: no host call of an entry point"]
 
 
-# --- After the sandbox (invariant 3; final security review R4) --------------------------------
+# --- After the sandbox (invariant 3) -------------------------------------------------------------
 
 
 def after_agent(workflow: dict[str, Any], job: str = "review") -> list[dict[str, Any]]:

@@ -29,7 +29,7 @@ the run).
 Exit codes: 0 review written (or, for ``fetch``, the checkout prepared), 2
 the harness ran but produced no review, 1 anything else.
 
-The harness contract is unchanged: ``bash <adapter>/run.sh`` under
+The harness contract (harnesses/README.md): ``bash <adapter>/run.sh`` under
 ``timeout``, in the checkout, with ``PROMPT_FILE``, ``REPO_DIR``,
 ``OUT_DIR``, ``CONTEXT_DIR``, ``MODEL``, ``HARNESS_PREFIX``, ``PR_NUMBER``
 and ``STUB_PADDING_KIB`` set, and the run's ``HOME``, ``TMPDIR`` and forced
@@ -108,7 +108,7 @@ class Params:
 
 
 def _tostring(value: Any) -> str:
-    """jq's ``tostring``: strings as they are, anything else as compact JSON."""
+    """A JSON value as text: a string as it is, anything else as compact JSON."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -186,7 +186,7 @@ class Run:
         self.adapter_dir = os.path.join(root, "harnesses", params.harness)
         self.harness_prefix = os.path.join(root, "harness", params.harness)
         # The environment overrides of every command (git and the harness):
-        # what the bash version exported.
+        # the forced GIT_* settings.
         self.env: dict[str, str] = dict(GIT_ENV)
 
     def _scratch(self, *dirs: str) -> None:
@@ -284,7 +284,7 @@ class Run:
             if found is not None:
                 return found
             git.run("fetch", "-q", "--no-tags", f"--deepen={deepen}", "origin", p.head_sha, p.base_sha)
-        # As in bash: no merge-base attempt after the last deepening.
+        # After the last deepening, unshallow without another merge-base attempt.
         git.run("fetch", "-q", "--no-tags", "--unshallow", "origin", p.head_sha, p.base_sha)
         found = git.line("merge-base", p.base_sha, p.head_sha)
         if found is None:
@@ -350,7 +350,7 @@ class Run:
         os.mkdir(self.result_dir)
 
     def _run_harness(self) -> int:
-        """The adapter's exit code (bash's '$?': 128 + n for a signal, 127 if it cannot start)."""
+        """The adapter's exit code, as a shell reports it: 128 + n for signal n, 127 if it cannot start."""
         p = self.params
         env = {
             **self.env,
@@ -397,7 +397,7 @@ class Run:
             "review_bytes": review_bytes,
         }
         os.makedirs(self.result_dir, exist_ok=True)
-        # The layout of 'jq -n' (two-space indent), which the bash version wrote.
+        # A stable layout: two-space indent, non-ASCII as is, a final newline.
         text = json.dumps(meta, indent=2, ensure_ascii=False) + "\n"
         files.write_new(os.path.join(self.result_dir, "meta.json"), text.encode("utf-8"))
 
@@ -462,7 +462,7 @@ def read_review(path: str) -> tuple[bytes, bool] | None:
 
 
 def parse_args(args: Sequence[str]) -> tuple[str, str]:
-    """(phase, workspace), with the bash version's messages."""
+    """(phase, workspace); the messages are part of the CLI contract the test suites pin."""
     phase = "all"
     rest = list(args)
     if rest and rest[0] == "--phase":
@@ -484,7 +484,8 @@ def run(args: Sequence[str], root: str) -> int:
     params = load_params(os.path.join(ws, "in", "params.json"))
     # Caller configuration (trusted: the caller's validated inputs and its
     # addendum file at the caller's workflow commit), next to this script's
-    # own files. Missing files mean "not configured".
+    # own files. A missing caller file means "not configured"; a missing
+    # central list or template is fatal.
     config = reset.load_config(root)
     reset.check_coverage(config, ws, GIT_ENV)
     current = Run(ws, root, params, config)

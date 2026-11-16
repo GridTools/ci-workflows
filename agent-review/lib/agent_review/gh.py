@@ -13,8 +13,8 @@ parses it (invariant 2 in docs/agent-review.md). Python receives only the
 projected fields.
 
 The argument order is fixed: ``gh api [--paginate] [-X METHOD] <endpoint>
-[--input -] [--jq FILTER]``, as the bash scripts call it; the fakes in
-tests/test-authorize.sh and tests/test-publish-comment.sh match on it.
+[--input -] [--jq FILTER]``: the fake ``gh`` in tests/test-authorize.sh
+and tests/test-publish-comment.sh matches on it.
 """
 
 from agent_review import runner, validate
@@ -22,7 +22,7 @@ from agent_review import runner, validate
 METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 # A relative API path with an optional query: never an option ('-...'), a
 # URL or a host. '[' and ']' only in the path, for bot logins such as
-# 'dependabot[bot]' (bash passed them through to gh as they are).
+# 'dependabot[bot]', which gh takes as they are.
 ENDPOINT = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._~/%\[\]-]*(?:\?[A-Za-z0-9._~%=&-]*)?")
 
 
@@ -41,8 +41,8 @@ def api(
     ``jq`` must be a constant of the calling code, never data. ``body`` is
     sent on stdin (``--input -``). A failure raises runner.CommandError,
     whose stderr holds gh's message. With ``stderr_is_error``, output on
-    stderr is a failure even if gh exits 0 (a bash caller that captured
-    ``2>&1`` would have compared it as part of the answer).
+    stderr is a failure even if gh exits 0, for callers that compare the
+    answer exactly: a warning on stderr means it may not be what they asked.
     """
     validate.require(ENDPOINT, endpoint, "API endpoint")
     if method not in METHODS:

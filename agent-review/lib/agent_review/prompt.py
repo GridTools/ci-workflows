@@ -12,14 +12,15 @@ never scanned again, so a placeholder inside any value (a ``{{PR_BODY}}``
 in the title, say) stays as it is, and the prompt is at most the template
 plus each value once per placeholder in the template.
 
-The values are prepared as the bash version did, on bytes:
+The values are prepared on bytes, and the test suites pin the result:
 
-- ``$(...)`` drops NUL bytes and every trailing newline (``substituted``);
-- ``clip`` is ``head -c N | iconv -f UTF-8 -t UTF-8 -c``: a byte cap, then
-  invalid or cut multi-byte sequences dropped;
-- ``jq -r '.x // "" | tostring'``: null and false become empty, strings
-  are themselves, other values their compact JSON; jq prints a newline
-  after the value, which the cap counts.
+- ``substituted`` drops NUL bytes and every trailing newline, so a value
+  never adds blank lines before the text that follows its placeholder;
+- ``clip`` caps a value in bytes, then drops invalid or cut multi-byte
+  sequences, so the prompt is valid UTF-8;
+- ``jq_text`` turns a JSON value into text: null and false become empty,
+  strings are themselves, other values their compact JSON. A newline is
+  added after the value before the cap, and counts towards it.
 """
 
 import json
@@ -44,7 +45,7 @@ PLACEHOLDER = re.compile(rb"\{\{([A-Z_]+)\}\}", re.ASCII)
 
 
 def substituted(data: bytes) -> bytes:
-    """What bash's ``$(...)`` keeps of a command's output."""
+    """``data`` without NUL bytes and trailing newlines."""
     return data.replace(b"\0", b"").rstrip(b"\n")
 
 
@@ -54,7 +55,7 @@ def clip(data: bytes, max_bytes: int) -> bytes:
 
 
 def jq_text(value: Any) -> str:
-    """``jq -r '. // "" | tostring'`` of a parsed JSON value."""
+    """A parsed JSON value as text: empty for null and false, a string as is, else compact JSON."""
     if value is None or value is False:
         return ""
     if isinstance(value, str):
@@ -64,19 +65,19 @@ def jq_text(value: Any) -> str:
 
 def _utf8(text: str) -> bytes:
     # A lone surrogate escape ('\ud800') parses in Python but cannot be
-    # encoded; jq rejects the whole document. Replace it, as decoders do.
+    # encoded. Replace it, as decoders do: the review goes on.
     return _SURROGATE.sub("\ufffd", text).encode("utf-8")
 
 
 def title_bytes(title: str) -> bytes:
-    """jq -r | tr -d '\\r' | head -n 1 | clip 512, then ``$(...)``."""
+    """The title's first line, without CR, clipped to PR_TITLE_MAX_BYTES (one line for the prompt)."""
     data = (_utf8(title) + b"\n").replace(b"\r", b"")
     first_line = data[: data.index(b"\n") + 1]
     return substituted(clip(first_line, PR_TITLE_MAX_BYTES))
 
 
 def body_bytes(body: str) -> bytes:
-    """jq -r | tr -d '\\r' | clip 16384, then ``$(...)``."""
+    """The body without CR, clipped to PR_BODY_MAX_BYTES."""
     data = (_utf8(body) + b"\n").replace(b"\r", b"")
     return substituted(clip(data, PR_BODY_MAX_BYTES))
 
@@ -85,8 +86,8 @@ def read_pr(path: str) -> tuple[bytes, bytes]:
     """The PR's title and body from the raw API response, as prompt bytes."""
     try:
         data = files.read_bytes(path, PR_JSON_MAX_BYTES)
-        # Invalid UTF-8 becomes U+FFFD, as jq did: the title and body are
-        # data for the prompt, and an odd byte must not stop the review.
+        # Invalid UTF-8 becomes U+FFFD: the title and body are data for the
+        # prompt, and an odd byte must not stop the review.
         pr = json.loads(data.decode("utf-8", errors="replace"))
     except (OSError, ValueError, RecursionError) as e:
         raise Fatal(f"Cannot read the pull request from '{path}': {e}") from e
@@ -103,7 +104,7 @@ def rules_bytes(rule_files: Sequence[str]) -> bytes:
 
 
 def addendum_bytes(addendum: bytes) -> bytes:
-    """``$(printf '### Project notes\\n\\n%s\\n' "$(clip 8192 <file)")``, or empty without an addendum."""
+    """'### Project notes', a blank line and the clipped addendum; empty without an addendum."""
     if not addendum:
         return b""
     inner = substituted(clip(addendum, ADDENDUM_PROMPT_MAX_BYTES))

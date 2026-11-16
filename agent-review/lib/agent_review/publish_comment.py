@@ -21,9 +21,8 @@ The comment is found by a marker on its first line, among this workflow's
 own comments only (``BOT_LOGIN``), never with ``gh pr comment --edit-last``:
 other tools (PR Agent) post as the same bot. The comment listing is a
 ``gh --jq`` projection (id, login, and the first 256 characters of the
-body's first line, as TSV), so this
-host never parses a comment body (invariant 2); only the first line is
-compared, as bytes, with the marker.
+body's first line, as TSV), so this host never parses a comment body
+(invariant 2); only the first line is compared, as bytes, with the marker.
 """
 
 import json
@@ -35,23 +34,22 @@ from agent_review import files, gh, runner, sanitize, validate, workflow
 
 # GitHub rejects comment bodies over 65536 characters.
 BODY_MAX_BYTES = 65536
-# The review read by 'sanitize' and 'render'. The review job caps review.md
-# at 64 KiB; the bash version had no cap at all.
+# The review read by 'sanitize' and 'render': far above the review job's
+# 64 KiB cap on review.md, only so that a broken input cannot exhaust memory.
 INPUT_MAX_BYTES = 16 * 1024 * 1024
 DEFAULT_BOT_LOGIN = "github-actions[bot]"
 EXIT_INVALID = 3
 
-# bash: ^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$ (harness, version, model)
+# The harness, version and model in the comment's header.
 LABEL = validate.pattern(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}")
-# bash: ^https://github\.com/[A-Za-z0-9_./-]+$
 RUN_URL = validate.pattern(r"https://github\.com/[A-Za-z0-9_./-]+")
 COMMENT_ID = validate.pattern(r"[1-9][0-9]{0,19}")
 # The projection of the comment listing; a constant, never data. Only the
 # first FIRST_LINE_CHARS characters of each first line, so that a long
 # comment adds at most about 1 KB to the listing (300 comments with 60 KB
 # first lines would otherwise pass runner's output cap). Many thousands of
-# comments still can, or hit the time limit: 'post' then fails. Longer than any marker
-# (at most 150 characters), so the comparison stays exact.
+# comments still can, or hit the time limit: 'post' then fails. Longer
+# than any marker (at most 150 characters), so the comparison stays exact.
 FIRST_LINE_CHARS = 256
 LISTING_JQ = f'.[] | [.id, .user.login, (.body | split("\\n") | .[0] | .[0:{FIRST_LINE_CHARS}])] | @tsv'
 ASCII_WHITESPACE = " \t\n\v\f\r"
@@ -81,7 +79,7 @@ def marker(harness: str) -> str:
 
 
 def parse_options(args: Sequence[str], known: Sequence[str]) -> dict[str, str]:
-    """``--name value`` pairs, as the bash version read them; the last one wins."""
+    """``--name value`` pairs; the last one wins, and a missing option is empty."""
     values = dict.fromkeys(known, "")
     rest = list(args)
     while rest:
@@ -117,8 +115,7 @@ def cmd_sanitize() -> bytes:
 
 def render(*, harness: str, version: str, model: str, head_sha: str, run_url: str, review: bytes) -> bytes:
     """The comment body for ``review`` (raw bytes), as UTF-8."""
-    # The bash version took the sanitised text through '$(...)', which drops
-    # trailing newlines.
+    # Trailing newlines dropped: the comment's layout adds its own.
     safe_bytes, cut = sanitize_review(review)
     safe = safe_bytes.rstrip(b"\n").decode("utf-8", errors="strict")
     if not safe.strip(ASCII_WHITESPACE):
@@ -244,7 +241,7 @@ def cmd_post(args: Sequence[str]) -> bytes:
     # so neither a caller nor a pull request can choose which comments
     # count as ours.
     cid = find_comment(listing, os.environ.get("BOT_LOGIN") or DEFAULT_BOT_LOGIN, want)
-    # Our own body, encoded as JSON (never parsing anything); compact, as 'jq -c'.
+    # Our own body, encoded as compact JSON (never parsing anything).
     payload = (json.dumps({"body": body}, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     if cid is not None:
         url = _gh(
@@ -274,7 +271,7 @@ def run(argv: Sequence[str]) -> bytes:
         raise Failure("Usage: publish-comment sanitize|render|post [options]")
     command, args = argv[0], argv[1:]
     if command == "sanitize":
-        # The bash version ignored extra arguments here too.
+        # Extra arguments are ignored (part of the CLI contract).
         return cmd_sanitize()
     if command == "render":
         return cmd_render(args)

@@ -7,18 +7,19 @@ and which environment it gets depend on the trust zone the caller runs in
 ``TRUSTED_HOST``
     ``authorize`` and ``publish-comment post``: they run before any untrusted
     code, or on a fresh VM. A bare program name is looked up on ``PATH``
-    and the environment is inherited, as the bash versions do (the tests put
-    a fake ``gh`` first on ``PATH``).
+    and the environment is inherited: the workflow fixes ``PATH`` on those
+    steps, and the test suites put a fake ``gh`` first on ``PATH``.
 ``SANDBOX``
     ``run-review``, inside AWF: ``PATH`` lookup and the inherited
     environment, plus the caller's overrides (the forced ``GIT_*``
     settings). An inherited ``GIT_ALLOW_PROTOCOL`` reaches git.
 ``TAINTED_HOST``
-    On the host after the sandbox has run (``collect-result``, which starts
-    no process at all): the program
-    must be an absolute path under ``/usr/bin`` or ``/bin``, and the
-    environment is fixed (``FIXED_ENV`` plus overrides, never ``PATH``):
-    ``~/.local/bin`` and the like may hold planted programs.
+    The host after the sandbox has run. No process starts there today
+    (``collect-result`` runs there and starts none); the zone exists so
+    that any future one gets an absolute program under ``/usr/bin`` or
+    ``/bin`` and a fixed environment (``FIXED_ENV`` plus overrides, never
+    ``PATH``), because ``~/.local/bin`` and the like may hold programs the
+    sandbox planted.
 
 The lookup never uses a relative ``PATH`` entry (an empty entry means the
 working directory), and the program is resolved to an absolute path before
