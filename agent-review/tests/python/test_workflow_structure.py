@@ -541,7 +541,8 @@ def test_awf_is_named_only_as_the_call(line: str) -> None:
     )
     step["run"] = line + "\n" + step["run"]
     found = ws.sandbox_output_problems(workflow, SHELL)
-    assert found and all("line 1 names awf other than as the call" in p for p in found), found
+    # The line also precedes the call, which is reported too.
+    assert sum("line 1 names awf other than as the call" in p for p in found) == 2, found
 
 
 @pytest.mark.parametrize(
@@ -559,6 +560,36 @@ def test_only_status_lines_follow_the_awf_call(name: str, line: str) -> None:
     step["run"] = step["run"] + line + "\n"
     found = ws.sandbox_output_problems(workflow, SHELL)
     assert found and all("after the awf call is not one of" in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('"${WS}" 2>&1 \\\n', '"${WS}" 1>&2 2>&1 \\\n'),
+        ('"${WS}" 2>&1 \\\n', '"${WS}" >/dev/stderr 2>&1 \\\n'),
+        ('"${WS}" 2>&1 \\\n', '"${WS}" < /dev/null 2>&1 \\\n'),
+        ('--image-tag "${IMAGE_TAG}" \\\n', '--image-tag "$(cat "${WS}/prompt.md")" \\\n'),
+        ('--image-tag "${IMAGE_TAG}" \\\n', "--image-tag `id` \\\n"),
+        ('--image-tag "${IMAGE_TAG}" \\\n', "--image-tag x; cat y; true \\\n"),
+        ('sudo -E "${AWF_BIN}" \\\n', 'cat y && sudo -E "${AWF_BIN}" \\\n'),
+    ],
+)
+def test_the_awf_call_has_no_shell_syntax_of_its_own(old: str, new: str) -> None:
+    """A redirection or substitution in the call writes around the filter."""
+    workflow = copy.deepcopy(WORKFLOW)
+    assert edit_runs(workflow, old, new)
+    found = ws.sandbox_output_problems(workflow, SHELL)
+    assert len(found) == 4 and all("which can bypass the filter" in p for p in found), found
+
+
+@pytest.mark.parametrize("line", ['cat "${WS}/prompt.md"', "set -x", 'export OPENAI_API_KEY="${KEY}"; env'])
+def test_only_the_key_lines_precede_the_awf_call(line: str) -> None:
+    """The fetch sandbox has written the workspace: printing from it before the call is unfiltered."""
+    workflow = copy.deepcopy(WORKFLOW)
+    step = next(s for s in workflow["jobs"]["review"]["steps"] if s.get("name") == "Run the review in the sandbox")
+    step["run"] = step["run"].replace("unset KEY\n", f"unset KEY\n{line}\n")
+    found = ws.sandbox_output_problems(workflow, SHELL)
+    assert found and all("before the awf call is not one of" in p for p in found), found
 
 
 def test_a_filtered_awf_call_passes() -> None:

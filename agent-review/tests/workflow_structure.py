@@ -461,6 +461,19 @@ AWF_SETTER = 'echo "AWF_BIN=$(command -v awf)" >> "$GITHUB_ENV"'
 AFTER_AWF = frozenset(
     {"rc=${PIPESTATUS[0]}", 'echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"', 'exit "${rc}"', 'exit "${PIPESTATUS[0]}"'}
 )
+# The only lines allowed before an awf call in its step: the agent step's
+# choice of key variable. Nothing before the call may print pull request text.
+BEFORE_AWF = frozenset(
+    {
+        'if [ "$(head -n 1 "/opt/agent-review/harnesses/${HARNESS}/wire")" = openai-chat ]; then',
+        'export OPENAI_API_KEY="${KEY}"',
+        "fi",
+        "unset KEY",
+        "set +e",
+    }
+)
+# Shell syntax that would let a part of the call write around the filter.
+AWF_CALL_SYNTAX = re.compile(r"[<>;&|`]|\$\(")
 COMMON_SH = "harnesses/common.sh"
 DIAG_DEFINITION = re.compile(r"^\s*(?:function\s+diag\b|diag\s*\(\s*\))", re.MULTILINE)
 
@@ -468,8 +481,10 @@ DIAG_DEFINITION = re.compile(r"^\s*(?:function\s+diag\b|diag\s*\(\s*\))", re.MUL
 def _awf_call_problems(where: str, script: str) -> list[str]:
     """awf is named only as '"${AWF_BIN}"' (or where it is found); each call is filtered and ends the step.
 
+    Before the first call come only comments and the lines in BEFORE_AWF.
     Each call continues to a '-- …  2>&1 \\' line followed by exactly the
-    filter line; after it come only comments and the lines in AFTER_AWF.
+    filter line, with no redirection, pipe, list or command substitution
+    of its own; after it come only comments and the lines in AFTER_AWF.
     """
     problems = []
     lines = script.split("\n")
@@ -482,6 +497,10 @@ def _awf_call_problems(where: str, script: str) -> list[str]:
             problems.append(f"{where}: line {number + 1} names awf other than as the call '{AWF_CALL}'")
         if AWF_CALL in line:
             calls.append(number)
+    for number in range(calls[0] if calls else 0):
+        code = lines[number].strip()
+        if code and not code.startswith("#") and code not in BEFORE_AWF:
+            problems.append(f"{where}: line {number + 1} before the awf call is not one of {sorted(BEFORE_AWF)}")
     for index, number in enumerate(calls):
         end = number
         while end < len(lines) and not lines[end].strip().startswith("-- ") and lines[end].endswith(" \\"):
@@ -492,6 +511,11 @@ def _awf_call_problems(where: str, script: str) -> list[str]:
             continue
         if not command.endswith(AWF_COMMAND_END):
             problems.append(f"{where}: the awf command does not end with '{AWF_COMMAND_END}' (stderr unfiltered)")
+            continue
+        call = "\n".join([*lines[number:end], command.removesuffix(AWF_COMMAND_END)])
+        syntax = sorted(set(AWF_CALL_SYNTAX.findall(call)))
+        if syntax:
+            problems.append(f"{where}: the awf call on line {number + 1} uses {syntax}, which can bypass the filter")
             continue
         if not (end + 1 < len(lines) and lines[end + 1].strip() == AWF_OUTPUT_FILTER):
             problems.append(f"{where}: the awf command is not followed by '{AWF_OUTPUT_FILTER}'")
