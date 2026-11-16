@@ -213,7 +213,7 @@ def test_file_growing_past_the_cap_while_read(
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
 @pytest.mark.parametrize("directory", ["ws", "ws/out"])
 def test_search_only_directories(directory: str, ws: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Mode 0311 (search, no read): bash's path lookup worked, so must this."""
+    """Mode 0311 (search, no read): enough to reach the files, so they are collected."""
     (ws / directory).chmod(0o311)
     try:
         rc, out = collect(capsys, ws)
@@ -227,7 +227,7 @@ def test_search_only_directories(directory: str, ws: pathlib.Path, capsys: pytes
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
 @pytest.mark.parametrize("mode", [0o444, 0o000])
 def test_out_dir_without_search_permission(mode: int, ws: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Each file is refused on its own (bash said 'missing or not a regular file')."""
+    """Without search permission each file is refused on its own, with its own warning."""
     (ws / "ws" / "out").chmod(mode)
     try:
         rc, out = collect(capsys, ws)

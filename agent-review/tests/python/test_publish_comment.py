@@ -1,6 +1,6 @@
 """agent_review.publish_comment: render and post (tests/test-publish-comment.sh is the black-box spec).
 
-Unit tests of the parts the bash suite does not reach, and the entry point
+Unit tests of the parts the .sh suite does not reach, and the entry point
 under the production command line in a hostile environment, with a fake
 'gh' first on PATH.
 """
@@ -47,7 +47,7 @@ def test_render_empty(review: bytes) -> None:
 
 
 def test_render_non_ascii_whitespace_is_not_empty() -> None:
-    # As in bash under LC_ALL=C: only ASCII whitespace counts.
+    # Only ASCII whitespace makes a review empty; U+00A0 is content.
     assert render("\u00a0\n".encode()).endswith("\n\n\u00a0\n".encode())
 
 
@@ -61,11 +61,11 @@ def test_render_invalid_utf8() -> None:
     ("review", "noted"),
     [
         (b"x" * 59999, False),
-        # Exactly the cap and not cut: no note (bash noted it).
+        # Exactly the cap and not cut: no note.
         (b"x" * 60000, False),
         (b"x" * 60000 + b"\n", False),
         (b"x" * 60001, True),
-        # Grows past the cap through escaping, cut: noted (bash did not).
+        # Grows past the cap through escaping, cut: noted.
         (b"xx" + b"@a" * 12000, True),
         # Larger than the cap only because of dropped characters: not cut.
         (b"ok\n" + "\u200b".encode() * 30000, False),
@@ -234,7 +234,7 @@ def test_post_json_body_and_listing(fake_gh: tuple[pathlib.Path, dict[str, str]]
     ]
     log = (directory / "requests.log").read_bytes().split(b"\n", 1)
     assert log[0] == b"POST repos/example-org/example/issues/9/comments"
-    # Compact, as 'jq -Rsc', and the body exactly.
+    # Compact JSON with no spaces, and the body exactly.
     assert log[1].startswith(b'{"body":"')
     assert json.loads(log[1]) == {"body": body.decode()}
 

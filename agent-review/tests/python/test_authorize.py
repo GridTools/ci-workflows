@@ -1,9 +1,9 @@
-"""agent_review.authorize: the validators, the bash emulations and the decision.
+"""agent_review.authorize: the validators, splitting inputs and command output, and the decision.
 
-The black-box cases are in tests/test-authorize.sh (unchanged from the bash
-version); these test each piece, with the bash traps of
-docs/adr/0004-python-runtime.md, and the entry point in a hostile
-environment.
+The black-box cases are in tests/test-authorize.sh, the specification of
+the entry point; these test each piece, with the traps of Python's looser
+defaults (docs/adr/0004-python-runtime.md, Context), and the entry point
+in a hostile environment.
 """
 
 import os
@@ -91,7 +91,7 @@ def test_count_nonempty_lines_is_grep_c_dot(text: str, count: int) -> None:
         (b"write\r\n", "write\r"),
         (b" write \n", " write "),
         (b"\nwrite", "\nwrite"),
-        (b"wr\0ite\n", "wr\0ite"),  # bash drops the NUL; it must not match
+        (b"wr\0ite\n", "wr\0ite"),  # the NUL is kept, so it never matches "write"
         (b"write\xff", "write\ufffd"),
     ],
 )
@@ -114,7 +114,7 @@ def test_command_output_strips_trailing_newlines_only(stdout: bytes, want: str) 
         ("", ("", "")),
     ],
 )
-def test_read_two_fields_is_bash_read(text: str, fields: tuple[str, str]) -> None:
+def test_read_two_fields(text: str, fields: tuple[str, str]) -> None:
     assert authorize.read_two_fields(text) == fields
 
 
@@ -367,8 +367,8 @@ def test_static_inputs_fail_before_any_lookup() -> None:
 
 
 def test_a_denied_writer_skips_before_the_shas_are_checked() -> None:
-    # bash checked the writer first, then the pinned shas: a bad sha from a
-    # denied actor is a skip, not an error.
+    # The writer is checked before the pinned shas (an order test-authorize.sh
+    # pins): a bad sha from a denied actor is a skip, not an error.
     lookups = Lookups(shas=("main", ""), level="read")
     with pytest.raises(Skip, match="actor has 'read' permission; skipping"):
         lookups.decide(dispatch_env())

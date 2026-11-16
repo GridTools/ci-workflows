@@ -43,7 +43,8 @@ The checks run in a fixed order, which tests/test-authorize.sh pins, so
 the same input always stops at the same first error. Values are read
 strictly (docs/agent-review.md, "Inputs"): ASCII-only classes and
 whitespace, values that are not UTF-8 are rejected, and ``gh`` output is
-compared byte for byte (no NUL dropped, nothing on stderr).
+compared exactly as text: a NUL is kept, so such a value never matches, and
+output on stderr is a failure.
 """
 
 import os

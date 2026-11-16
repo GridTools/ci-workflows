@@ -621,8 +621,8 @@ jobs:
           fi
 
       # Absolute paths and a fixed PATH: the runner's default PATH searches
-      # home directories such as ~/.local/bin before /usr/bin, and the sandbox
-      # could write there.
+      # home directories such as ~/.local/bin before /usr/bin. AWF mounts them
+      # read-only, but after the sandbox ran the host is treated as tainted.
       - &collect
         name: Collect the result
         if: always() && steps.key.outputs.skipped != 'true' && steps.teardown.outcome == 'success'

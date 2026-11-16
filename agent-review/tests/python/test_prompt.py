@@ -72,7 +72,7 @@ def test_caps() -> None:
 
 
 def test_lone_surrogate_becomes_a_replacement_character(tmp_path: pathlib.Path) -> None:
-    # jq rejects such a document, which failed the fetch phase; the review now goes on.
+    # A lone surrogate is only data: it becomes U+FFFD and the fetch goes on.
     path = tmp_path / "pr.json"
     path.write_bytes(b'{"title": "a\\ud800b", "body": "\\udfff"}')
     assert prompt.read_pr(str(path)) == ("a\ufffdb".encode(), "\ufffd".encode())

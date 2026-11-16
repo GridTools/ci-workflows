@@ -132,8 +132,8 @@ def collect(tmp_path: pathlib.Path, data: bytes) -> tuple[bytes, bool] | None:
     ("data", "expected"),
     [
         (b"### Summary\nok\n", b"### Summary\nok\n"),
-        (b"Writing it now.\n\n### Summary\nok", b"### Summary\nok\n"),  # awk adds the final newline
-        (b"no heading", b"no heading"),  # cat does not
+        (b"Writing it now.\n\n### Summary\nok", b"### Summary\nok\n"),  # cut at a heading: newline added
+        (b"no heading", b"no heading"),  # no heading: kept as it is
         (b"#### deeper\n### Summary\n", b"### Summary\n"),
         (b"x ### not a heading\n", b"x ### not a heading\n"),
         (b"### a\xff\xc3\n", b"### a\n"),  # invalid bytes dropped
@@ -154,7 +154,7 @@ def test_read_review_heading_across_scan_chunks(tmp_path: pathlib.Path, monkeypa
 def test_read_review_truncates(tmp_path: pathlib.Path) -> None:
     exact = b"### S\n" + b"x" * (run_review.REVIEW_MAX_BYTES - 7) + b"\n"
     assert collect(tmp_path, exact) == (exact, False)
-    # Without the final newline, awk's added one counts too.
+    # Without the final newline, the added one counts too.
     assert collect(tmp_path, exact[:-1]) == (exact, False)
     over = b"### S\nx" + "\u00e9".encode() * 40000  # 59900 falls inside a character
     review, truncated = collect(tmp_path, over) or (b"", False)
@@ -163,7 +163,7 @@ def test_read_review_truncates(tmp_path: pathlib.Path) -> None:
     kept = review[: -len(run_review.TRUNCATION_NOTE)]
     assert len(kept) == run_review.REVIEW_MAX_BYTES - 100 - 1  # the cut character is dropped
     kept.decode("utf-8", errors="strict")
-    # Off by one: one byte over the limit, through awk's final newline.
+    # Off by one: one byte over the limit, through the added final newline.
     one_over = b"### S\n" + b"x" * (run_review.REVIEW_MAX_BYTES - 6)
     assert collect(tmp_path, one_over + b"\n") == collect(tmp_path, one_over)
     assert (collect(tmp_path, one_over) or (b"", False))[1]
@@ -307,7 +307,7 @@ def test_harness_contract(tmp_path: pathlib.Path, upstream: Upstream) -> None:
         ('ln -s /etc/passwd "${OUT_DIR}/review.md"', 2, "no-review", 0),
         ('mkfifo "${OUT_DIR}/review.md"', 2, "no-review", 0),
         ('echo "### S" > "${OUT_DIR}/review.md"; exit 124', 1, "timeout", 124),
-        # Killed by a signal: 'timeout' reports 128 + 9, which bash also counted as a timeout.
+        # Killed by a signal: 128 + 9 (the SIGKILL of 'timeout --kill-after') counts as a timeout too.
         ('echo "### S" > "${OUT_DIR}/review.md"; kill -KILL $$', 1, "timeout", 137),
     ],
 )

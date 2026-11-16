@@ -1,4 +1,4 @@
-"""agent_review.validate: bash-like matching, without Python's looser defaults."""
+"""agent_review.validate: whole-value ASCII matching, without Python's looser defaults."""
 
 import re
 

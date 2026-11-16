@@ -135,7 +135,7 @@ def test_no_raw_html_can_form(text: str) -> None:
 
 
 def test_unicode_digits_and_letters_are_not_login_characters() -> None:
-    # bash's [A-Za-z0-9] under LC_ALL=C is ASCII only; so is this one.
+    # A login is ASCII letters and digits only: '@' before other letters is no mention.
     assert sanitize.clean("@\u0661 @\u00e9") == "@\u0661 @\u00e9"
 
 

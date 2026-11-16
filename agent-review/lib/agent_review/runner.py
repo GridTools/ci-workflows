@@ -18,8 +18,9 @@ and which environment it gets depend on the trust zone the caller runs in
     (``collect-result`` runs there and starts none); the zone exists so
     that any future one gets an absolute program under ``/usr/bin`` or
     ``/bin`` and a fixed environment (``FIXED_ENV`` plus overrides, never
-    ``PATH``), because ``~/.local/bin`` and the like may hold programs the
-    sandbox planted.
+    ``PATH``): the runner's ``PATH`` searches ``~/.local/bin`` and the like
+    first, and AWF mounts them read-only, but after the sandbox has run
+    nothing on the host is trusted (invariant 3).
 
 The lookup never uses a relative ``PATH`` entry (an empty entry means the
 working directory), and the program is resolved to an absolute path before

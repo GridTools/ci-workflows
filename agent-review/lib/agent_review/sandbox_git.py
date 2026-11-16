@@ -10,10 +10,9 @@ refused, no submodule recursion and no external diff (``SAFE_CONFIG``):
 
 ``GIT_ENV`` is part of the run's environment, which the harness inherits
 too, so the harness's own git calls get the same settings. Commands run in
-the sandbox zone: git
-is found on ``PATH`` and the environment is inherited, so an inherited
-``GIT_ALLOW_PROTOCOL`` reaches git (the offline test of the review phase
-relies on it).
+the sandbox zone: git is found on ``PATH`` and the environment is
+inherited, so an inherited ``GIT_ALLOW_PROTOCOL`` reaches git (the offline
+test of the review phase relies on it).
 """
 
 from collections.abc import Mapping, Sequence

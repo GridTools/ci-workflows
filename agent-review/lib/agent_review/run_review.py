@@ -423,8 +423,9 @@ def read_review(path: str) -> tuple[bytes, bool] | None:
 
     Models often open their answer with a note ("Writing the final review
     now.") although the prompt asks them to start with '### Summary': the
-    review is kept from its first '### ' heading, if any (as awk did, with
-    a final newline). Over REVIEW_MAX_BYTES, it is cut and a note appended;
+    review is kept from its first '### ' heading, if any, and then ends
+    with a newline (counted in the size); a review without such a heading
+    is kept as it is. Over REVIEW_MAX_BYTES, it is cut and a note appended;
     that is decided from the bytes read, never from the file's size, which
     the agent can change meanwhile. Invalid or cut UTF-8 sequences are
     dropped. The file is scanned in chunks, never held in memory whole: the

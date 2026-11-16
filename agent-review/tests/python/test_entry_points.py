@@ -180,7 +180,7 @@ def test_launcher_runs_python_entry_points_with_the_production_command_line(tmp_
 
 @pytest.mark.parametrize("shebang", ["#!/usr/bin/env bash", "#!/usr/bin/bash"])
 def test_launcher_refuses_bash_scripts(shebang: str, tmp_path: pathlib.Path) -> None:
-    # bin/ holds only Python entry points now; a bash script is not run at all.
+    # bin/ holds only Python entry points: a bash script is not run at all.
     script = tmp_path / "script"
     script.write_text(f"{shebang}\necho ran\n")
     result = launcher('run_entry "$1"', str(script))
