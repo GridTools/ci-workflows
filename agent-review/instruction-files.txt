@@ -10,8 +10,12 @@
 # files in subdirectories too (opencode attaches a nested AGENTS.md to every
 # file it reads in that directory). A pattern ending in '/' matches a
 # directory and everything below it. Blank lines and lines starting with '#'
-# are ignored. Each pattern becomes the git pathspec ':(glob)**/<pattern>'
-# (or ':(glob)**/<pattern>**' for directories), so '*' does not cross '/'.
+# are ignored. Each pattern becomes the git pathspec
+# ':(glob,icase)**/<pattern>' (or ':(glob,icase)**/<pattern>**' for
+# directories), so '*' does not cross '/' and case does not matter. A
+# symlink or a gitlink where a directory pattern names a directory, or at a
+# directory leading to a pattern with '/', is reset too (see
+# docs/agent-review.md, invariant 6).
 #
 # This is the union over all harnesses: extend it when adding an adapter
 # (see harnesses/README.md).

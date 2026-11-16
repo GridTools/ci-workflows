@@ -12,3 +12,9 @@ set -euo pipefail
 [ $# -eq 1 ] || { echo "Usage: install.sh <prefix>" >&2; exit 1; }
 mkdir -p "$1"
 echo "stub-1" >"$1/VERSION"
+
+# The Python runtime on the host, as the trusted entry points get it
+# (bin/probe, one line; docs/adr/0004-python-runtime.md). run.sh prints the
+# same line from inside the sandbox; the self-test compares the two.
+ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+/usr/bin/python3 -I -S -B "${ar_root}/bin/probe"

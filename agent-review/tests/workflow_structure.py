@@ -1,0 +1,971 @@
+"""Structural checks of the agent review workflow and its Python code.
+
+The one complete list of what the structure test enforces; the docs state
+each invariant and point here. Run through test-workflow-structure.py (the
+CLI). The checks are functions returning a list of problems, so
+tests/python/test_workflow_structure.py can feed them crafted inputs as
+well as the real files; the checks marked (CLI) live in the script and run
+against the real workflow only.
+
+Workflow (agent-review.yml, read with YAML aliases resolved, as GitHub
+does):
+
+- jobs and secrets (CLI): only the keyed 'review' job declares an
+  environment; a job without one references no secret ('secret_refs'),
+  except the boolean check in 'authorize' that the key is not a shared
+  secret; only 'publish' has a write permission; no expression ('${{')
+  inside any 'run:' script, in any workflow file; 'review-keyless' runs
+  the same steps as 'review' except the listed ones; the keyed job's event
+  backstop and concurrency group; artifact names carry the call id; only
+  'authorize' reads the 'api_base' input (invariants 1 and 12);
+- host PATH: every step that calls an entry point on the host sets
+  'PATH: /usr/bin:/bin' (host_path_problems);
+- after the sandbox (invariant 3, post_sandbox_problems): the steps after
+  the agent's run, and what they inherit, hold no token or secret
+  reference; no step of the review jobs sets a variable that runs code
+  before a step's script; every 'run:' step uses the fixed shell and
+  PATH; only 'actions/upload-artifact'; the result upload's exact path;
+- sandbox output (invariant 11, sandbox_output_problems): every awf call
+  sends stdout and stderr through the exact filter and nothing else in
+  its step can print; 'diag' is defined once, as one filtered pipeline;
+- the collect gate (collect_gate_problems): 'Collect the result' runs only
+  if 'Stop the sandbox' succeeded, because collect-result's single-link
+  check relies on no sandbox process being alive.
+
+Python (invariant 13, docs/adr/0004-python-runtime.md):
+
+- call sites (call_site_problems, python_word_problems,
+  shell_python_problems): every reference to '<root>/bin/<name>' uses the
+  root allowed for its job and step, names an entry point, and is exactly
+  '/usr/bin/python3 -I -S -B <root>/bin/<name>' at the start of a command,
+  with the file named inline; no other Python, 'pip' or 'setup-python' in
+  agent-review.yml; shell files under bin/ and harnesses/ call Python only
+  in that form, with the root from 'ar_root_line';
+- entry points (entry_problems): each file in bin/ is exactly the template,
+  mode 100644 (not executable), with a module that defines main();
+- the tree (tree_problems, shebang_problems): no symlink or submodule, no
+  '.pth', '.pyc' or '__pycache__', no '*customize.py'; lib/ holds only
+  agent_review/, and that only '.py' files; no '.py' file or Python
+  shebang outside lib/agent_review/ and tests/;
+- imports and calls (ast_problems): only STDLIB_ALLOWED and agent_review.*;
+  none of BANNED_CALLS or BANNED_OS; subprocess only in runner.py; no
+  'shell=' argument; no aliased or star import; no getattr, setattr or
+  delattr on a module or an attribute of one (except GETATTR_ALLOWED), nor
+  those three used as values; no module used as a value and no
+  sys.modules (except the probe); no standard-library module imported
+  through agent_review.*; each trust zone named only by ZONE_ALLOWED;
+- token reach (token_reach_problems): only the 'authorize' and
+  'publish-comment' entry points can import agent_review.gh, and only
+  gh.py names the 'gh' program. The token itself is in a step's env,
+  which the workflow decides; this keeps the code that runs there narrow.
+"""
+
+import ast
+import pathlib
+import re
+import subprocess
+from collections.abc import Iterator, Mapping
+from typing import Any
+
+import yaml
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+AR_DIR = ROOT / "agent-review"
+WORKFLOWS = ROOT / ".github" / "workflows"
+REVIEW_WORKFLOW = WORKFLOWS / "agent-review.yml"
+
+# The only 'secrets.' reference allowed in a job without an environment.
+SHARED_KEY_CHECK = ("authorize", "Authorize", "HAS_SHARED_KEY", "${{ secrets.inference_api_key != '' }}")
+# Steps of 'review-keyless' that differ from those of 'review'.
+KEYLESS_DIFFERENT = {"Check the inference key": "Check the harness wire"}
+
+# --- Entry points ----------------------------------------------------------
+
+PYTHON_CALL = "/usr/bin/python3 -I -S -B"
+ENTRY_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}", re.ASCII)
+# Every Python entry point is exactly this text, apart from the module name.
+# Keep it in sync with tests/lib.sh (the first line is the marker).
+ENTRY_TEMPLATE = """\
+# agent-review Python entry point: run only as '/usr/bin/python3 -I -S -B <root>/bin/<name>'.
+# The fixed template of agent-review/tests/workflow_structure.py; the code is in lib/agent_review/.
+import sys
+
+if not (sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode and sys.flags.safe_path):
+    sys.stderr.write("agent-review entry points run only as '/usr/bin/python3 -I -S -B <root>/bin/<name>'.\\n")
+    sys.exit(2)
+
+import os  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "lib"))
+
+from agent_review.{module} import main  # noqa: E402
+
+sys.exit(main())
+"""
+PYTHON_MARKER = ENTRY_TEMPLATE.split("\n", 1)[0]
+
+
+def module_of(name: str) -> str:
+    return name.replace("-", "_")
+
+
+def render_entry(name: str) -> str:
+    return ENTRY_TEMPLATE.replace("{module}", module_of(name))
+
+
+def entry_kind(name: str, text: str) -> str | None:
+    """'python' for exactly the template, else None: anything else in bin/ fails closed."""
+    first = text.split("\n", 1)[0]
+    if first == PYTHON_MARKER and text == render_entry(name):
+        return "python"
+    return None
+
+
+def entry_problems(entries: Mapping[str, tuple[str, str]], lib_sources: Mapping[str, str]) -> list[str]:
+    """``entries``: bin/ name -> (text, git mode); ``lib_sources``: path -> text."""
+    problems = []
+    for name, (text, mode) in sorted(entries.items()):
+        kind = entry_kind(name, text)
+        if not ENTRY_NAME.fullmatch(name):
+            problems.append(f"bin/{name}: invalid entry point name")
+        if kind is None:
+            problems.append(f"bin/{name}: not the exact Python entry-point template")
+        if kind != "python":
+            continue
+        if mode != "100644":
+            problems.append(f"bin/{name}: a Python entry point must have mode 100644, not {mode}")
+        source = lib_sources.get(f"lib/agent_review/{module_of(name)}.py")
+        if source is None:
+            problems.append(f"bin/{name}: no lib/agent_review/{module_of(name)}.py")
+        elif not any(isinstance(node, ast.FunctionDef) and node.name == "main" for node in ast.parse(source).body):
+            problems.append(f"bin/{name}: lib/agent_review/{module_of(name)}.py defines no main()")
+    return problems
+
+
+# --- Call sites --------------------------------------------------------------
+
+TRUSTED_ROOT = "${RUNNER_TEMP}/trusted"
+OPT_ROOT = "/opt/agent-review"
+ROOT_REF = re.compile(r"(\$\{RUNNER_TEMP\}/trusted|/opt/agent-review)/bin/([A-Za-z0-9_.-]+)", re.ASCII)
+# The review jobs switch from the fetched files to the root-owned copy here.
+OPT_FROM_STEP = "Prepare the sandbox inputs"
+TRUSTED_JOBS = ("authorize", "prepare", "publish")
+REVIEW_JOBS = ("review", "review-keyless")
+# What may precede a reference: the text before it on its line.
+EXISTENCE_CHECK = '[ -f "'
+PYTHON_FORMS = {TRUSTED_ROOT: f'{PYTHON_CALL} "', OPT_ROOT: f"{PYTHON_CALL} "}
+# What must follow a Python reference: the closing quote, or a separator.
+PYTHON_AFTER = {TRUSTED_ROOT: re.compile(r'"(?: |$)'), OPT_ROOT: re.compile(r"(?: |$)")}
+
+
+def python_call(root: str, name: str) -> str:
+    """The exact Python call of an entry point, as written in agent-review.yml."""
+    quote = '"' if root == TRUSTED_ROOT else ""
+    return f"{PYTHON_FORMS[root]}{root}/bin/{name}{quote}"
+
+
+def run_scripts(workflow: Mapping[str, Any]) -> Iterator[tuple[str, int, str, str]]:
+    """Yields (job, step index, step name, run script)."""
+    for job_id, job in workflow["jobs"].items():
+        for index, step in enumerate(job.get("steps", [])):
+            if "run" in step:
+                yield job_id, index, step.get("name", str(index)), step["run"]
+
+
+def allowed_root(workflow: Mapping[str, Any], job_id: str, index: int) -> str | None:
+    if job_id in TRUSTED_JOBS:
+        return TRUSTED_ROOT
+    if job_id in REVIEW_JOBS:
+        names = [s.get("name") for s in workflow["jobs"][job_id]["steps"]]
+        if OPT_FROM_STEP not in names:
+            return None
+        return OPT_ROOT if index >= names.index(OPT_FROM_STEP) else TRUSTED_ROOT
+    return None
+
+
+def call_site_problems(workflow: Mapping[str, Any], kinds: Mapping[str, str | None]) -> list[str]:
+    """Roots and call forms of every '<root>/bin/<name>' in a 'run:' script."""
+    problems = []
+    for job_id, index, step_name, script in run_scripts(workflow):
+        where = f"{job_id}/{step_name}"
+        for line in script.split("\n"):
+            for m in ROOT_REF.finditer(line):
+                root, name = m.group(1), m.group(2)
+                before, after = line[: m.start()], line[m.end() :]
+                want_root = allowed_root(workflow, job_id, index)
+                if want_root is None:
+                    problems.append(f"{where}: no allowed root for job '{job_id}'")
+                elif root != want_root:
+                    problems.append(f"{where}: '{root}/bin/{name}', but this step may use only '{want_root}'")
+                kind = kinds.get(name)
+                if kind is None:
+                    problems.append(f"{where}: bin/{name} is not a known entry point")
+                    continue
+                if before.endswith(EXISTENCE_CHECK) and after.startswith('" ]'):
+                    continue
+                start = len(before) - len(PYTHON_FORMS[root])
+                bounded = start == 0 or (start > 0 and CALL_BOUNDARY.fullmatch(before[start - 1]) is not None)
+                if not before.endswith(PYTHON_FORMS[root]) or not bounded or PYTHON_AFTER[root].match(after) is None:
+                    problems.append(f"{where}: bin/{name} is Python; call it exactly as {python_call(root, name)}")
+    return problems
+
+
+def strings(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:
+    """Yields (path, string) for every string value in a YAML tree."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from strings(value, (*path, str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from strings(value, (*path, str(index)))
+    elif isinstance(node, str):
+        yield path, node
+
+
+PYTHON_WORD = re.compile(r"python", re.IGNORECASE)
+# What may precede '/usr/bin/python3': a command boundary, never part of a
+# word or path ('"${HOME}"/usr/bin/python3').
+CALL_BOUNDARY = re.compile(r"[\s(;|&]")
+_BOUNDARY = r"(?<![^\s(;|&])"
+PIP_WORD = re.compile(r"(?<![A-Za-z0-9_])pip(?:x|[0-9.]*)(?![A-Za-z0-9_])|setup-python|ensurepip", re.IGNORECASE)
+YAML_PYTHON_CALL = re.compile(
+    _BOUNDARY + re.escape(PYTHON_CALL) + r' (?:"\$\{RUNNER_TEMP\}/trusted|/opt/agent-review)/bin/([a-z][a-z0-9-]*)',
+    re.ASCII,
+)
+
+
+def python_word_problems(workflow: Mapping[str, Any], kinds: Mapping[str, str | None]) -> list[str]:
+    """No Python in agent-review.yml except the exact call form of a Python entry point."""
+    problems = []
+    for path, value in strings(workflow):
+        where = "/".join(path)
+        allowed = {
+            m.start() + len("/usr/bin/") for m in YAML_PYTHON_CALL.finditer(value) if kinds.get(m.group(1)) == "python"
+        }
+        for m in PYTHON_WORD.finditer(value):
+            if m.start() not in allowed:
+                problems.append(f"{where}: 'python' outside the call form of a Python entry point")
+        for m in PIP_WORD.finditer(value):
+            problems.append(f"{where}: '{m.group(0)}'")
+    return problems
+
+
+# In shell files the root is the variable 'ar_root', set from the file's own
+# path by exactly ar_root_line() (the agent-review/ directory).
+SHELL_ROOT_VAR = "ar_root"
+SHELL_PYTHON_CALL = re.compile(
+    _BOUNDARY + re.escape(PYTHON_CALL) + r' "\$\{' + SHELL_ROOT_VAR + r'\}/bin/([a-z][a-z0-9-]*)"', re.ASCII
+)
+
+
+def ar_root_line(rel: str) -> str:
+    """The line that sets the root in the shell file ``rel`` (relative to agent-review/)."""
+    ups = "/".join([".."] * (len(rel.split("/")) - 1))
+    return f'{SHELL_ROOT_VAR}=$(cd "$(dirname "${{BASH_SOURCE[0]}}")/{ups}" && pwd)'
+
+
+def shell_python_problems(sources: Mapping[str, str], kinds: Mapping[str, str | None]) -> list[str]:
+    """In shell files: Python only as '/usr/bin/python3 -I -S -B "${ar_root}/bin/<python entry>"'.
+
+    Comment lines are skipped, but not the shebang. A file that calls Python
+    must set 'ar_root' with exactly ar_root_line(), and nothing else.
+    """
+    problems = []
+    for rel, text in sorted(sources.items()):
+        calls = False
+        for number, line in enumerate(text.split("\n"), 1):
+            if line.lstrip().startswith("#") and not (number == 1 and line.startswith("#!")):
+                continue
+            allowed = {
+                m.start() + len("/usr/bin/")
+                for m in SHELL_PYTHON_CALL.finditer(line)
+                if kinds.get(m.group(1)) == "python"
+            }
+            calls = calls or bool(allowed)
+            if any(m.start() not in allowed for m in PYTHON_WORD.finditer(line)):
+                problems.append(
+                    f"{rel}:{number}: Python only as '{PYTHON_CALL} \"${{{SHELL_ROOT_VAR}}}/bin/<entry point>\"'"
+                )
+            if re.match(rf"\s*(?:export\s+|local\s+|readonly\s+|declare\s+\S+\s+)?{SHELL_ROOT_VAR}\b", line) and (
+                line.strip() != ar_root_line(rel)
+            ):
+                problems.append(f"{rel}:{number}: set '{SHELL_ROOT_VAR}' only as '{ar_root_line(rel)}'")
+        if calls and ar_root_line(rel) not in [line.strip() for line in text.split("\n")]:
+            problems.append(f"{rel}: calls Python but does not set '{SHELL_ROOT_VAR}' as '{ar_root_line(rel)}'")
+    return problems
+
+
+# --- PATH on the host ------------------------------------------------------------------
+
+FIXED_PATH = "/usr/bin:/bin"
+# The trusted-host steps, where 'gh' is looked up on PATH: they must exist.
+FIXED_PATH_STEPS = (("authorize", "Authorize"), ("publish", "Render the review"), ("publish", "Publish the review"))
+
+
+def host_path_problems(workflow: Mapping[str, Any]) -> list[str]:
+    """Every step that calls an entry point on the host sets 'PATH: /usr/bin:/bin' (ADR 0004).
+
+    The runner's default PATH searches home directories first; on the
+    trusted host 'gh' is found on PATH. Calls inside AWF (the step runs
+    '"${AWF_BIN}"') are exempt: there PATH is the sandbox's own.
+    """
+    problems = []
+    seen = set()
+    for job_id, job in workflow["jobs"].items():
+        for step in job.get("steps", []):
+            script = step.get("run", "")
+            if PYTHON_CALL not in script or '"${AWF_BIN}"' in script:
+                continue
+            name = step.get("name", "")
+            seen.add((job_id, name))
+            path = (step.get("env") or {}).get("PATH")
+            if path != FIXED_PATH:
+                problems.append(
+                    f"{job_id}/{name}: calls an entry point on the host with PATH {path!r}, not {FIXED_PATH!r}"
+                )
+    problems += [
+        f"{job}/{name}: no host call of an entry point" for job, name in FIXED_PATH_STEPS if (job, name) not in seen
+    ]
+    return problems
+
+
+# --- After the sandbox (invariant 3) -------------------------------------------------------
+
+TAINTED_SHELL = "/usr/bin/bash --noprofile --norc -e -o pipefail {0}"
+RESULT_PATH = "${{ runner.temp }}/result"
+RESULT_ARTIFACT = "agent-review-result-"
+# A token or secret reference by name ('GH_TOKEN', 'github.token', "github['token']",
+# 'secrets.X', "secrets['X']"). 'context_refs' also catches the forms that read
+# a whole context.
+TOKEN_REF = re.compile(r"GH_TOKEN|GITHUB_TOKEN|github\s*(?:\.\s*token|\[\s*['\"]token)|secrets\s*[.\[]", re.IGNORECASE)
+# A use of the 'github' or 'secrets' context, with the property it reads if
+# it names one ('github.event', "github['event']"). Not a property ('x.github')
+# or a string literal ("'github'").
+CONTEXT_REF = re.compile(
+    r"(?<![\w.'-])(github|secrets)\b(?:\s*\.\s*([A-Za-z_][\w-]*)|\s*\[\s*'([^']*)'\s*\])?", re.IGNORECASE
+)
+
+
+def context_refs(value: str) -> list[str]:
+    """The uses of a context in ``value`` that can read a secret or the token.
+
+    An allowlist: every use of 'secrets', and every use of 'github' except
+    a named property other than 'token'. 'toJSON(github)', 'github' and
+    'github.*' hold the token too. Context and property names ignore case,
+    as in GitHub's expressions. Fails closed on prose that names a context.
+    """
+    refs = []
+    for match in CONTEXT_REF.finditer(value):
+        name = match.group(2) or match.group(3)
+        if match.group(1).lower() == "secrets" or name is None or name.lower() == "token":
+            refs.append(match.group(0))
+    return refs
+
+
+def secret_refs(value: str) -> list[str]:
+    """The uses of the 'secrets' context in ``value``."""
+    return [ref for ref in context_refs(value) if ref[:7].lower() == "secrets"]
+
+
+# Files whose lines become the environment or PATH of every later step.
+STEP_STATE_FILES = ("GITHUB_ENV", "GITHUB_PATH")
+# Variables that run code before a step's script: bash reads BASH_ENV
+# (and ENV in POSIX mode) despite '--noprofile --norc', SHELLOPTS and
+# BASHOPTS set options, BASH_FUNC_* define functions, LD_* load libraries,
+# NODE_OPTIONS ('--require') loads a module into a JavaScript action.
+STARTUP_VARIABLE = re.compile(
+    r"\b(?:BASH_ENV|ENV|SHELLOPTS|BASHOPTS|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|NODE_OPTIONS)\b|\bBASH_FUNC_"
+)
+
+
+def _startup_problems(where: str, node: Any) -> list[str]:
+    """No 'env:' key in ``node`` is a startup variable, and its shell names none.
+
+    ``node`` is the workflow, a job or a step; its shell is 'shell:' or
+    'defaults: run: shell:' ('env BASH_ENV=… bash {0}').
+    """
+    problems = [
+        f"{where}: sets {key!r}, which runs code before the step's script"
+        for key in (node.get("env") or {})
+        if STARTUP_VARIABLE.match(str(key))
+    ]
+    shells = [node.get("shell"), ((node.get("defaults") or {}).get("run") or {}).get("shell")]
+    problems += [
+        f"{where}: shell {shell!r} names {match.group(0)!r}, which runs code before the step's script"
+        for shell in shells
+        if isinstance(shell, str)
+        for match in STARTUP_VARIABLE.finditer(shell)
+    ]
+    return problems
+
+
+def _token_problems(where: str, node: Any, path: tuple[str, ...] = ()) -> list[str]:
+    found = [
+        (key_path, match.group(0))
+        for key_path, value in [*strings(node, path), *_keys(node, path)]
+        for match in TOKEN_REF.finditer(value)
+    ]
+    found += [(key_path, ref) for key_path, value in strings(node, path) for ref in context_refs(value)]
+    return [f"{where}: token reference {ref!r} in {'/'.join(key_path)}" for key_path, ref in dict.fromkeys(found)]
+
+
+def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:
+    """Yields (path, key) for every mapping key in a YAML tree ('env: {GH_TOKEN: ...}')."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield (*path, str(key)), str(key)
+            yield from _keys(value, (*path, str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _keys(value, (*path, str(index)))
+
+
+def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
+    """The steps after the agent's run ('id: agent') in both review jobs treat the host as tainted.
+
+    No step of those jobs, nor their job or the workflow, sets a variable
+    that runs code before a step's script ('BASH_ENV', ...; in 'env:' or
+    through $GITHUB_ENV). No token or secret reference ('TOKEN_REF',
+    'context_refs'), in those steps or in what they inherit:
+    the workflow's and the job's 'env:' and 'defaults:', and the
+    $GITHUB_ENV and $GITHUB_PATH files, which no step of the job that holds
+    a token may name; every 'run:' step uses the fixed shell and
+    'PATH: /usr/bin:/bin'; only 'actions/upload-artifact' as an action; the
+    result upload's 'path' is exactly '${{ runner.temp }}/result'.
+    """
+    problems = _startup_problems("workflow", workflow)
+    for key in ("env", "defaults"):
+        problems += _token_problems("workflow", workflow.get(key) or {}, (key,))
+    for job_id in REVIEW_JOBS:
+        job = workflow["jobs"][job_id]
+        problems += _startup_problems(job_id, job)
+        for key in ("env", "defaults"):
+            problems += _token_problems(job_id, job.get(key) or {}, (key,))
+        steps = job["steps"]
+        for step in steps:
+            where = f"{job_id}/{step.get('name', '?')}"
+            problems += _startup_problems(where, step)
+            text = "\n".join(value for _, value in strings(step))
+            if any(name in text for name in STEP_STATE_FILES):
+                if _token_problems("", step):
+                    problems.append(f"{where}: holds a token and writes $GITHUB_ENV or $GITHUB_PATH")
+                if STARTUP_VARIABLE.search(text):
+                    problems.append(f"{where}: writes $GITHUB_ENV or $GITHUB_PATH and names a startup variable")
+        ids = [step.get("id") for step in steps]
+        if "agent" not in ids:
+            problems.append(f"{job_id}: no step with 'id: agent'")
+            continue
+        uploads = 0
+        for step in steps[ids.index("agent") + 1 :]:
+            where = f"{job_id}/{step.get('name', '?')}"
+            problems += _token_problems(where, step)
+            if "run" in step:
+                if step.get("shell") != TAINTED_SHELL:
+                    problems.append(f"{where}: shell is not '{TAINTED_SHELL}'")
+                if (step.get("env") or {}).get("PATH") != FIXED_PATH:
+                    problems.append(f"{where}: env PATH is not '{FIXED_PATH}'")
+            uses = step.get("uses")
+            if uses is not None:
+                if not uses.startswith("actions/upload-artifact@"):
+                    problems.append(f"{where}: action '{uses}' after the sandbox")
+                elif str((step.get("with") or {}).get("name", "")).startswith(RESULT_ARTIFACT):
+                    uploads += 1
+                    if step["with"].get("path") != RESULT_PATH:
+                        problems.append(f"{where}: the result upload's path is not '{RESULT_PATH}'")
+        if uploads != 1:
+            problems.append(f"{job_id}: {uploads} result upload(s) after the sandbox, not 1")
+    return problems
+
+
+# --- Sandbox output ------------------------------------------------------------------
+
+# Every line of AWF's output goes through exactly this filter: carriage
+# returns and NUL bytes dropped, '##[' (the runner's legacy command syntax, matched
+# anywhere in a line) broken up with a zero-width space, a prefix so no line
+# starts with '::' (invariant 11).
+AWF_OUTPUT_FILTER = "| /usr/bin/sed -u -e 's/\\r//g' -e 's/\\x00//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e 's/^/awf| /'"
+DIAG_FILTER = "sed -e 's/\\x00//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e \"s/^/${ADAPTER_NAME:-harness}| /\" >&2"
+
+
+AWF_CALL = '"${AWF_BIN}"'
+AWF_COMMAND_END = " 2>&1 \\"
+# 'AWF_BIN' in any spelling, or 'awf' as a word (not '/awf', 'awf-…', 'awf.json').
+AWF_WORD = re.compile(r"AWF_BIN|(?<![\w./-])awf(?![\w.-])")
+# The one other line that names awf: where the binary is found.
+AWF_SETTER = 'echo "AWF_BIN=$(command -v awf)" >> "$GITHUB_ENV"'
+# The only lines allowed after an awf call's filter: they report its status.
+AFTER_AWF = frozenset(
+    {"rc=${PIPESTATUS[0]}", 'echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"', 'exit "${rc}"', 'exit "${PIPESTATUS[0]}"'}
+)
+# The only lines allowed before an awf call in its step: the agent step's
+# choice of key variable. Nothing before the call may print pull request text.
+BEFORE_AWF = frozenset(
+    {
+        'if [ "$(head -n 1 "/opt/agent-review/harnesses/${HARNESS}/wire")" = openai-chat ]; then',
+        'export OPENAI_API_KEY="${KEY}"',
+        "fi",
+        "unset KEY",
+        "set +e",
+    }
+)
+# Shell syntax that would let a part of the call write around the filter.
+AWF_CALL_SYNTAX = re.compile(r"[<>;&|`]|\$\(")
+COMMON_SH = "harnesses/common.sh"
+DIAG_DEFINITION = re.compile(r"^\s*(?:function\s+diag\b|diag\s*\(\s*\))", re.MULTILINE)
+
+
+def _awf_call_problems(where: str, script: str) -> list[str]:
+    """awf is named only as '"${AWF_BIN}"' (or where it is found); each call is filtered and ends the step.
+
+    Before the first call come only comments and the lines in BEFORE_AWF.
+    Each call continues to a '-- …  2>&1 \\' line followed by exactly the
+    filter line, with no redirection, pipe, list or command substitution
+    of its own; after it come only comments and the lines in AFTER_AWF.
+    """
+    problems = []
+    lines = script.split("\n")
+    calls = []
+    for number, line in enumerate(lines):
+        code = line.strip()
+        if code.startswith("#") or code == AWF_SETTER:
+            continue
+        if AWF_WORD.search(line.replace(AWF_CALL, "")):
+            problems.append(f"{where}: line {number + 1} names awf other than as the call '{AWF_CALL}'")
+        if AWF_CALL in line:
+            calls.append(number)
+    for number in range(calls[0] if calls else 0):
+        code = lines[number].strip()
+        if code and not code.startswith("#") and code not in BEFORE_AWF:
+            problems.append(f"{where}: line {number + 1} before the awf call is not one of {sorted(BEFORE_AWF)}")
+    for index, number in enumerate(calls):
+        end = number
+        while end < len(lines) and not lines[end].strip().startswith("-- ") and lines[end].endswith(" \\"):
+            end += 1
+        command = lines[end].strip() if end < len(lines) else ""
+        if not command.startswith("-- "):
+            problems.append(f"{where}: the awf call on line {number + 1} has no '-- ' command line")
+            continue
+        if not command.endswith(AWF_COMMAND_END):
+            problems.append(f"{where}: the awf command does not end with '{AWF_COMMAND_END}' (stderr unfiltered)")
+            continue
+        call = "\n".join([*lines[number:end], command.removesuffix(AWF_COMMAND_END)])
+        syntax = sorted(set(AWF_CALL_SYNTAX.findall(call)))
+        if syntax:
+            problems.append(f"{where}: the awf call on line {number + 1} uses {syntax}, which can bypass the filter")
+            continue
+        if not (end + 1 < len(lines) and lines[end + 1].strip() == AWF_OUTPUT_FILTER):
+            problems.append(f"{where}: the awf command is not followed by '{AWF_OUTPUT_FILTER}'")
+            continue
+        stop = calls[index + 1] if index + 1 < len(calls) else len(lines)
+        for after in range(end + 2, stop):
+            code = lines[after].strip()
+            if code and not code.startswith("#") and code not in AFTER_AWF:
+                problems.append(f"{where}: line {after + 1} after the awf call is not one of {sorted(AFTER_AWF)}")
+    return problems
+
+
+def _diag_problems(shell: Mapping[str, str]) -> list[str]:
+    """'diag' is defined once, in common.sh, as one pipeline that ends with exactly the filter."""
+    defined = [path for path, text in shell.items() for _ in DIAG_DEFINITION.finditer(text)]
+    if defined != [COMMON_SH]:
+        return [f"'diag' is defined in {defined}, not once in {COMMON_SH}"]
+    body = re.search(r"^diag\(\) \{\n(.*?)\n\}$", shell[COMMON_SH], re.MULTILINE | re.DOTALL)
+    lines = [line.strip() for line in body.group(1).split("\n")] if body else []
+    if not lines or lines[-1] != DIAG_FILTER or not all(line.endswith("|") for line in lines[:-1]):
+        return [f"{COMMON_SH}: 'diag' is not a pipeline that ends with '{DIAG_FILTER}'"]
+    return []
+
+
+def sandbox_output_problems(workflow: Mapping[str, Any], shell: Mapping[str, str]) -> list[str]:
+    """Every 'awf' call in agent-review.yml, and 'diag' in the harness shell files, filters all its output.
+
+    ``shell`` maps each tracked shell file under agent-review/ to its text.
+    """
+    problems = []
+    awf_steps = 0
+    for job_id, _, step_name, script in run_scripts(workflow):
+        awf_steps += AWF_CALL in script
+        problems += _awf_call_problems(f"{job_id}/{step_name}", script)
+    if awf_steps == 0:
+        problems.append("no awf call found")
+    return problems + _diag_problems(shell)
+
+
+# --- The collect gate -------------------------------------------------------------
+
+COLLECT_STEP = "Collect the result"
+TEARDOWN_ID = "teardown"
+TEARDOWN_SUCCESS = "steps.teardown.outcome == 'success'"
+
+
+def collect_gate_problems(workflow: Mapping[str, Any]) -> list[str]:
+    """'Collect the result' runs only after a successful teardown, in every job that has it."""
+    problems = []
+    found = 0
+    for job_id, job in workflow["jobs"].items():
+        steps = job.get("steps", [])
+        for index, step in enumerate(steps):
+            if step.get("name") != COLLECT_STEP:
+                continue
+            found += 1
+            where = f"{job_id}/{COLLECT_STEP}"
+            if not any(s.get("id") == TEARDOWN_ID for s in steps[:index]):
+                problems.append(f"{where}: no earlier step with id '{TEARDOWN_ID}'")
+            condition = str(step.get("if", "")).strip()
+            if condition.startswith("${{") and condition.endswith("}}"):
+                condition = condition[3:-2].strip()
+            terms = [term.strip() for term in condition.split("&&")]
+            # Only 'always()' may hold parentheses: no grouping, so no '!(...)'.
+            plain = "||" not in condition and all(t == "always()" or not set(t) & set("()") for t in terms)
+            if not plain:
+                problems.append(f"{where}: 'if:' is not a plain '&&' chain: {condition!r}")
+            elif TEARDOWN_SUCCESS not in terms:
+                problems.append(f"{where}: 'if:' does not require {TEARDOWN_SUCCESS!r}: {condition!r}")
+    if found == 0:
+        problems.append(f"no '{COLLECT_STEP}' step found")
+    return problems
+
+
+# --- Tree ----------------------------------------------------------------------
+
+FORBIDDEN_NAMES = ("sitecustomize.py", "usercustomize.py", "__pycache__")
+FORBIDDEN_SUFFIXES = (".pth", ".pyc", ".pyo")
+
+
+def tree_problems(index: list[tuple[str, str]]) -> list[str]:
+    """``index``: (git mode, path) of every tracked file under agent-review/."""
+    problems = []
+    for mode, path in index:
+        parts = path.split("/")
+        if mode == "120000":
+            problems.append(f"{path}: a symlink")
+        elif mode == "160000":
+            problems.append(f"{path}: a submodule")
+        if any(part in FORBIDDEN_NAMES for part in parts) or path.endswith(FORBIDDEN_SUFFIXES):
+            problems.append(f"{path}: forbidden name")
+        in_python_dirs = path.startswith(("agent-review/lib/agent_review/", "agent-review/tests/"))
+        if path.endswith(".py") and not in_python_dirs:
+            problems.append(f"{path}: Python files belong in lib/agent_review/ (or tests/)")
+        if path.startswith("agent-review/lib/"):
+            if not path.startswith("agent-review/lib/agent_review/"):
+                problems.append(f"{path}: lib/ may hold only agent_review/")
+            elif not path.endswith(".py"):
+                problems.append(f"{path}: agent_review/ may hold only .py files")
+    return problems
+
+
+def shebang_problems(first_lines: Mapping[str, str]) -> list[str]:
+    """No Python shebang outside lib/agent_review/ and tests/: such a file would run without '-I -S'.
+
+    ``first_lines``: path under agent-review/ -> its first line.
+    """
+    return [
+        f"{path}: a Python shebang ('{line}'); use an entry point in bin/"
+        for path, line in sorted(first_lines.items())
+        if line.startswith("#!")
+        and PYTHON_WORD.search(line)
+        and not path.startswith(("agent-review/lib/agent_review/", "agent-review/tests/"))
+    ]
+
+
+# --- Imports and calls (AST) -------------------------------------------------------
+
+STDLIB_ALLOWED = frozenset(
+    {
+        "__future__",
+        "argparse",
+        "base64",
+        "collections",
+        "contextlib",
+        "dataclasses",
+        "datetime",
+        "enum",
+        "errno",
+        "functools",
+        "hashlib",
+        "io",
+        "itertools",
+        "json",
+        "math",
+        "os",
+        "pathlib",
+        "re",
+        "secrets",
+        "selectors",
+        "shutil",
+        "stat",
+        "string",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "textwrap",
+        "time",
+        "tomllib",
+        "typing",
+        "unicodedata",
+    }
+)
+RUNNER_MODULE = "lib/agent_review/runner.py"
+GH_MODULE = "lib/agent_review/gh.py"
+BANNED_CALLS = frozenset(
+    {"eval", "exec", "compile", "__import__", "breakpoint", "globals", "locals", "vars", "__builtins__"}
+)
+# Banned as attributes of anything, not only of 'os', so that a re-exported
+# or aliased module cannot reach them ('runner.os.system').
+BANNED_OS = re.compile(r"system|popen|exec[lv]p?e?|spawn[lv]p?e?|posix_spawnp?|fork|forkpty", re.ASCII)
+# 'sys.modules' gives any loaded module, whatever the import rules say.
+SYS_MODULES_ALLOWED = frozenset({"lib/agent_review/probe.py"})
+# Each trust zone only in the modules that run programs there: gh.py on the
+# trusted host, where the token is; run-review in the sandbox. The tainted
+# host (collect-result) starts no process, so no module but runner.py names it.
+ZONE_ALLOWED = {
+    "TRUSTED_HOST": frozenset({RUNNER_MODULE, GH_MODULE}),
+    "SANDBOX": frozenset({RUNNER_MODULE, "lib/agent_review/run_review.py", "lib/agent_review/sandbox_git.py"}),
+    "TAINTED_HOST": frozenset({RUNNER_MODULE}),
+}
+ATTRIBUTE_BUILTINS = ("getattr", "setattr", "delattr")
+# getattr() on these objects (not modules) is allowed: the probe reads sys.flags by name.
+GETATTR_ALLOWED = frozenset({"sys.flags"})
+# The probe lists its imported modules in a tuple to show that they import;
+# the rule is off for the whole file.
+MODULE_VALUES_ALLOWED = frozenset({"lib/agent_review/probe.py"})
+GH_ENTRY_POINTS = frozenset({"authorize", "publish-comment"})
+
+
+def _module_name(rel: str) -> str | None:
+    """'lib/agent_review/x.py' -> 'agent_review.x'; entry points -> None."""
+    if not rel.startswith("lib/") or not rel.endswith(".py"):
+        return None
+    name = rel[len("lib/") : -len(".py")].replace("/", ".")
+    return name.removesuffix(".__init__")
+
+
+def _imported_names(tree: ast.AST) -> set[str]:
+    """The names that import statements bind in ``tree``."""
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bound |= {a.asname or a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            bound |= {a.asname or a.name for a in node.names}
+    return bound
+
+
+def _module_names(tree: ast.AST) -> set[str]:
+    """The names that import statements bind to modules in ``tree``.
+
+    'import x' and 'import x.y' bind modules; 'from p import n' does when p is
+    the agent_review package or n is an allowlisted standard-library module.
+    """
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bound |= {a.asname or a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            bound |= {
+                a.asname or a.name for a in node.names if node.module == "agent_review" or a.name in STDLIB_ALLOWED
+            }
+    return bound
+
+
+def _dotted(node: ast.AST) -> str | None:
+    """'os.path' for the expression os.path; None if it is not a plain name chain."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id, *reversed(parts)])
+
+
+def ast_problems(sources: Mapping[str, str]) -> list[str]:
+    """``sources``: path relative to agent-review/ -> text, for lib/ and the Python bin/ files."""
+    problems = []
+    for rel, text in sorted(sources.items()):
+        try:
+            tree = ast.parse(text, filename=rel)
+        except SyntaxError as e:
+            problems.append(f"{rel}: does not parse ({e.msg})")
+            continue
+        imported = _imported_names(tree)
+        modules = _module_names(tree)
+        attribute_bases = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        called = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+        for node in ast.walk(tree):
+            where = f"{rel}:{getattr(node, 'lineno', 0)}"
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+                # 'import os as o' would hide 'o.system' from the attribute rule.
+                problems += [f"{where}: 'import os as {a.asname}'" for a in node.names if a.name == "os" and a.asname]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    problems.append(f"{where}: relative import; use 'agent_review.<module>'")
+                    continue
+                if any(a.name == "*" for a in node.names):
+                    problems.append(f"{where}: 'from {node.module} import *'")
+                names = [node.module or ""]
+                if node.module == "os":
+                    problems += [f"{where}: os.{a.name}" for a in node.names if BANNED_OS.fullmatch(a.name)]
+                if (node.module or "").split(".")[0] == "agent_review":
+                    # A standard-library module re-exported by a package module
+                    # ('from agent_review.runner import subprocess').
+                    problems += [
+                        f"{where}: '{a.name}' imported through {node.module}"
+                        for a in node.names
+                        if a.name in STDLIB_ALLOWED or a.name in ("importlib", "pickle", "marshal", "ctypes")
+                    ]
+            for name in names:
+                top = name.split(".")[0]
+                if top == "subprocess" and rel != RUNNER_MODULE:
+                    problems.append(f"{where}: subprocess outside agent_review/runner.py")
+                elif top not in STDLIB_ALLOWED and top != "agent_review":
+                    problems.append(f"{where}: import of '{name}' is not allowlisted")
+            if isinstance(node, ast.Name) and node.id in BANNED_CALLS:
+                problems.append(f"{where}: '{node.id}'")
+            if isinstance(node, ast.Attribute):
+                if BANNED_OS.fullmatch(node.attr):
+                    problems.append(f"{where}: '.{node.attr}'")
+                if node.attr == "subprocess" and rel != RUNNER_MODULE:
+                    problems.append(f"{where}: '.subprocess' outside agent_review/runner.py")
+                if node.attr in ZONE_ALLOWED and rel not in ZONE_ALLOWED[node.attr]:
+                    problems.append(f"{where}: the zone '{node.attr}' outside its modules")
+                if (
+                    node.attr == "modules"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "sys"
+                    and rel not in SYS_MODULES_ALLOWED
+                ):
+                    problems.append(f"{where}: 'sys.modules'")
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ATTRIBUTE_BUILTINS
+                and node.args
+            ):
+                chain = _dotted(node.args[0])
+                if chain is not None and chain.split(".")[0] in imported and chain not in GETATTR_ALLOWED:
+                    problems.append(f"{where}: {node.func.id}() on the module '{chain}'")
+            if (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id in modules
+                and id(node) not in attribute_bases
+                and rel not in MODULE_VALUES_ALLOWED
+            ):
+                # 'x = os' or 'f(os)' would hide a module from the rules above.
+                problems.append(f"{where}: the module '{node.id}' used as a value")
+            if isinstance(node, ast.Name) and node.id in ATTRIBUTE_BUILTINS and id(node) not in called:
+                # 's = setattr' would hide the call from the getattr rule.
+                problems.append(f"{where}: '{node.id}' used as a value")
+            if isinstance(node, ast.keyword) and node.arg == "shell":
+                problems.append(f"{where}: a 'shell=' argument")
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.rsplit("/", 1)[-1] == "gh"
+                and rel != GH_MODULE
+            ):
+                problems.append(f"{where}: the 'gh' program outside agent_review/gh.py")
+    return problems
+
+
+def _imports(text: str, known: set[str]) -> set[str]:
+    """The agent_review modules that ``text`` imports."""
+    found = set()
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Import):
+            found |= {a.name for a in node.names if a.name in known}
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            if node.module in known:
+                found.add(node.module)
+            found |= {f"{node.module}.{a.name}" for a in node.names if f"{node.module}.{a.name}" in known}
+    return found
+
+
+def import_closure(text: str, modules: Mapping[str, str]) -> set[str]:
+    """Every agent_review module reachable from ``text``; ``modules``: name -> text."""
+    known = set(modules)
+    seen: set[str] = set()
+    todo = _imports(text, known)
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        parent = name.rpartition(".")[0]
+        if parent in known:
+            todo.add(parent)
+        todo |= _imports(modules[name], known) - seen
+    return seen
+
+
+def token_reach_problems(sources: Mapping[str, str]) -> list[str]:
+    """Only the 'authorize' and 'publish-comment' entry points reach agent_review.gh."""
+    modules = {m: text for rel, text in sources.items() if (m := _module_name(rel))}
+    problems = []
+    for rel, text in sorted(sources.items()):
+        if not rel.startswith("bin/"):
+            continue
+        name = rel[len("bin/") :]
+        if "agent_review.gh" in import_closure(text, modules) and name not in GH_ENTRY_POINTS:
+            problems.append(f"{rel}: reaches agent_review.gh (the token); only {sorted(GH_ENTRY_POINTS)} may")
+    return problems
+
+
+# --- The repository ---------------------------------------------------------------
+
+
+def git_index(prefix: str = "agent-review") -> list[tuple[str, str]]:
+    """(mode, path) of the tracked files under ``prefix``: what the trusted tarball ships."""
+    out = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-s", "-z", "--", prefix],
+        check=True,
+        capture_output=True,
+    ).stdout.decode("utf-8")
+    index = []
+    for record in out.split("\0"):
+        if record:
+            meta, path = record.split("\t", 1)
+            index.append((meta.split(" ")[0], path))
+    return index
+
+
+def read(rel: str) -> str:
+    return (AR_DIR / rel).read_text(encoding="utf-8")
+
+
+def repository() -> dict[str, Any]:
+    """The tracked files the checks need."""
+    index = git_index()
+    modes = {path.removeprefix("agent-review/"): mode for mode, path in index}
+    entries = {rel[len("bin/") :]: (read(rel), mode) for rel, mode in modes.items() if rel.startswith("bin/")}
+    kinds = {name: entry_kind(name, text) for name, (text, _) in entries.items()}
+    lib = {rel: read(rel) for rel in modes if rel.startswith("lib/") and rel.endswith(".py")}
+    python = {**lib, **{f"bin/{n}": entries[n][0] for n, k in kinds.items() if k == "python"}}
+    shell = {
+        rel: read(rel)
+        for rel in modes
+        if rel.startswith("harnesses/") and (rel.endswith(".sh") or read(rel).startswith("#!"))
+    }
+    first_lines = {path: _first_line(path) for mode, path in index if mode != "120000"}
+    return {
+        "index": index,
+        "entries": entries,
+        "kinds": kinds,
+        "lib": lib,
+        "python": python,
+        "shell": shell,
+        "first_lines": first_lines,
+    }
+
+
+def _first_line(path: str) -> str:
+    with (ROOT / path).open("rb") as f:
+        return f.readline(256).decode("utf-8", errors="replace").rstrip("\n")
+
+
+def load(path: pathlib.Path) -> Any:
+    with path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)

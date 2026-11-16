@@ -22,6 +22,24 @@ diff_bytes=$(wc -c <"${CONTEXT_DIR}/diff.patch")
 prompt_bytes=$(wc -c <"${PROMPT_FILE}")
 head_sha=$(git -c core.hooksPath=/dev/null -C "${REPO_DIR}" rev-parse HEAD)
 
+# The Python runtime inside the sandbox, from the PR checkout as working
+# directory (bin/probe; install.sh prints the host's line).
+ar_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+/usr/bin/python3 -I -S -B "${ar_root}/bin/probe"
+
+# Sandbox output must not issue workflow commands in the legacy syntax
+# either, which the runner finds anywhere in a line (invariant 11): one line
+# on stdout and one through 'diag'. The self-test's 'check' job asserts
+# that neither became an annotation.
+# shellcheck source=../common.sh
+. "${ar_root}/harnesses/common.sh"
+echo "stub: ##[warning]agent-review-legacy-probe (stdout)"
+echo "##[warning]agent-review-legacy-probe (diag)" | ADAPTER_NAME=stub diag
+# The same with a NUL byte between the two '#', which a filter matching
+# only the literal '##[' would let through.
+printf 'stub: #\0#[warning]agent-review-legacy-probe (stdout, NUL)\n'
+printf '#\0#[warning]agent-review-legacy-probe (diag, NUL)\n' | ADAPTER_NAME=stub diag
+
 # Names only, never values: confirms in the log that no credential-like
 # variable other than AWF's placeholders reaches the sandbox.
 echo "stub: credential-like variables in the sandbox environment:"

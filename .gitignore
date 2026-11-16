@@ -1,0 +1,6 @@
+# Local tool caches; never commit bytecode (the structure test forbids it).
+__pycache__/
+*.py[co]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

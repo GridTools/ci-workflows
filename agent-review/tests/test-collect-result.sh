@@ -6,7 +6,7 @@ set -uo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-collect() { /usr/bin/bash "${BIN_DIR}/collect-result" "$@"; }
+collect() { run_entry "${BIN_DIR}/collect-result" "$@"; }
 
 setup_out() {
   mkdir -p "${TMP}/ws/out"
@@ -75,7 +75,8 @@ test_rejects_fifo_without_blocking() {
   setup_out
   rm "${TMP}/ws/out/review.md"
   mkfifo "${TMP}/ws/out/review.md"
-  timeout 10 /usr/bin/bash "${BIN_DIR}/collect-result" "${TMP}/ws/out" "${TMP}/dest" >log && grep -q "not a regular file" log &&
+  entry_command "${BIN_DIR}/collect-result" &&
+    timeout 10 "${ENTRY_CMD[@]}" "${TMP}/ws/out" "${TMP}/dest" >log && grep -q "not a regular file" log &&
     assert "fifo not copied" test ! -e "${TMP}/dest/review.md"
 }
 

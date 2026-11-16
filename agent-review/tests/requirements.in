@@ -1,0 +1,6 @@
+# Test-only tools for the self-test's 'python' job, never imported at run time.
+# Compile: uv pip compile --generate-hashes --python-version 3.12 --universal requirements.in -o requirements.txt
+mypy
+pytest
+pyyaml
+types-pyyaml

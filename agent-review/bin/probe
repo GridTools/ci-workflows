@@ -1,0 +1,15 @@
+# agent-review Python entry point: run only as '/usr/bin/python3 -I -S -B <root>/bin/<name>'.
+# The fixed template of agent-review/tests/workflow_structure.py; the code is in lib/agent_review/.
+import sys
+
+if not (sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode and sys.flags.safe_path):
+    sys.stderr.write("agent-review entry points run only as '/usr/bin/python3 -I -S -B <root>/bin/<name>'.\n")
+    sys.exit(2)
+
+import os  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "lib"))
+
+from agent_review.probe import main  # noqa: E402
+
+sys.exit(main())
