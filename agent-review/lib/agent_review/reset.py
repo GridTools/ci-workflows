@@ -470,7 +470,7 @@ def directory_target_specs(patterns: Iterable[str]) -> list[str]:
 def _is_directory(repo_dir: str, path: str) -> bool:
     try:
         return stat.S_ISDIR(os.lstat(os.path.join(repo_dir, path)).st_mode)
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):  # a missing path, or one through a file
         return False
 
 

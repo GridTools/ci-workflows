@@ -502,11 +502,65 @@ def test_awf_output_filter_is_required(old: str) -> None:
     assert len(ws.sandbox_output_problems(workflow, COMMON_SH)) == 4
 
 
+def test_awf_stderr_must_go_through_the_filter() -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    assert edit_runs(workflow, '"${WS}" 2>&1 \\\n', '"${WS}" \\\n')
+    found = ws.sandbox_output_problems(workflow, COMMON_SH)
+    assert len(found) == 4 and all("stderr unfiltered" in p for p in found), found
+
+
+FILTER = "            " + ws.AWF_OUTPUT_FILTER
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        ('sudo -E "${AWF_BIN}" --config c -- run-review --phase review "${WS}"\n', "has no '-- ' command line"),
+        ('sudo -E "${AWF_BIN}" -- run-review "${WS}" 2>&1 \\\n' + FILTER + "\n", "has no '-- ' command line"),
+        ('sudo -E "${AWF_BIN}" \\\n  --config c\n-- run-review 2>&1 \\\n' + FILTER + "\n", "has no '-- '"),
+        ('sudo -E "${AWF_BIN}" \\\n  -- run-review 2>&1 \\\n  | sed\n', "is not followed by"),
+        ('sudo -E "${AWF_BIN}" \\\n  -- run-review 2>/dev/null \\\n' + FILTER + "\n", "stderr unfiltered"),
+        ('sudo -E "${AWF_BIN}" \\\n  -- run-review 2>&1 \\\n' + FILTER + '\n"${AWF_BIN}" -- x\n', "line 4 has no"),
+    ],
+)
+def test_every_awf_call_is_filtered(script: str, expected: str) -> None:
+    workflow = {"jobs": {"review": {"steps": [{"name": "Run", "run": script}]}}}
+    found = ws.sandbox_output_problems(workflow, COMMON_SH)
+    assert len(found) == 1 and expected in found[0], found
+
+
+def test_a_filtered_awf_call_passes() -> None:
+    script = 'sudo -E "${AWF_BIN}" \\\n  --config c \\\n  -- run-review "${WS}" 2>&1 \\\n' + FILTER + "\nexit 0\n"
+    workflow = {"jobs": {"review": {"steps": [{"name": "Run", "run": script}]}}}
+    assert ws.sandbox_output_problems(workflow, COMMON_SH) == []
+
+
 def test_diag_filter_is_required() -> None:
     for rule in ("-e 's/##\\[/#\\xe2\\x80\\x8b#[/g' ", "-e 's/\\x00//g' "):
         weakened = COMMON_SH.replace(rule, "")
         assert weakened != COMMON_SH
         assert ws.sandbox_output_problems(WORKFLOW, weakened)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        # The filter only in a comment, 'diag' unfiltered.
+        lambda sh: sh.replace("diag() {", f"# {ws.DIAG_FILTER}\ndiag() {{").replace(
+            "cut -c1-400 |\n", "cut -c1-400 >&2\n#"
+        ),
+        # Output that bypasses the filter.
+        lambda sh: sh.replace("diag() {\n", "diag() {\n  tee /dev/stderr |\n  echo x >&2\n", 1),
+        # No 'diag' at all.
+        lambda sh: sh.replace("diag() {", "diag2() {"),
+    ],
+)
+def test_diag_must_be_one_filtered_pipeline(change: Any) -> None:
+    weakened = change(COMMON_SH)
+    assert weakened != COMMON_SH
+    assert ws.sandbox_output_problems(WORKFLOW, weakened) == [
+        f"harnesses/common.sh: 'diag' is not a pipeline that ends with '{ws.DIAG_FILTER}'"
+    ]
 
 
 def test_diag_breaks_legacy_commands(tmp_path: pathlib.Path) -> None:
@@ -739,6 +793,49 @@ def test_post_sandbox_rules_check_the_workflow_env(value: dict[str, str], expect
     workflow["env"] = value
     found = ws.post_sandbox_problems(workflow)
     assert any(expected in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "${{ toJSON(github) }}",
+        "${{ github }}",
+        "${{ github.* }}",
+        "${{ format('{0}', github) }}",
+        "${{ GitHub.Token }}",
+        "${{ github [ 'TOKEN' ] }}",
+        "${{ github[format('{0}', 'token')] }}",
+        "${{ toJSON(secrets) }}",
+        "${{ secrets['k'] }}",
+        "${{ Secrets.K }}",
+    ],
+)
+def test_whole_contexts_are_token_references(value: str) -> None:
+    assert ws.context_refs(value), value
+    workflow = copy.deepcopy(WORKFLOW)
+    step_named(workflow, "Collect the result")["env"]["T"] = value
+    found = ws.post_sandbox_problems(workflow)
+    assert any(p.startswith("review/Collect the result: token reference") for p in found), found
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "${{ github.event.pull_request.number }}",
+        "${{ github['event_name'] }}",
+        "${{ github.workspace }}/x",
+        "${{ steps.github.outputs.x }}",
+        "${{ contains(github.event_name, 'github') }}",
+        "https://github.com/o/r",
+    ],
+)
+def test_named_github_properties_are_not_token_references(value: str) -> None:
+    assert ws.context_refs(value) == []
+
+
+def test_secret_refs_are_only_secrets() -> None:
+    assert ws.secret_refs("${{ toJSON(secrets) }} ${{ github }} ${{ secrets.k }}") == ["secrets", "secrets.k"]
+    assert ws.secret_refs("${{ toJSON(github) }}") == []
 
 
 @pytest.mark.parametrize("job", ["review", "review-keyless"])

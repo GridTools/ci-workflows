@@ -871,6 +871,25 @@ def test_base_link_on_a_wildcard_way_to_a_pr_directory_fails_closed(tmp_path: pa
     assert "'docs/logo.png' is a symlink in the base commit to 'assets/logo.png', " + UNCOVERED in log, log
 
 
+@pytest.mark.parametrize(
+    ("fork", "head", "target"),
+    [
+        # The pull request replaces the target's directory with a file.
+        ({"notes/x.md": "base\n", "AGENTS.md": "-> notes/x.md"}, {"notes/x.md": None, "notes": "PR\n"}, "notes/x.md"),
+        # The base link itself goes through a regular file.
+        ({"CLAUDE.md": "base\n", "AGENTS.md": "-> CLAUDE.md/x"}, {}, "CLAUDE.md/x"),
+    ],
+)
+def test_base_link_through_a_file_is_refused_with_its_reason(
+    tmp_path: pathlib.Path, upstream: Upstream, fork: dict[str, str], head: dict[str, str | None], target: str
+) -> None:
+    """A target below a regular file is not a directory: the refusal names the link, not 'Not a directory'."""
+    ws, log = fetch(tmp_path, upstream, {**FORK, **fork}, head)
+    assert_stopped(ws, log)
+    assert f"'AGENTS.md' is a symlink in the base commit to '{target}', " + UNCOVERED in log, log
+    assert "Not a directory" not in log, log
+
+
 # --- The central reset list (final security review R1) ------------------------------------------
 
 

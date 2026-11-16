@@ -332,19 +332,51 @@ def host_path_problems(workflow: Mapping[str, Any]) -> list[str]:
 TAINTED_SHELL = "/usr/bin/bash --noprofile --norc -e -o pipefail {0}"
 RESULT_PATH = "${{ runner.temp }}/result"
 RESULT_ARTIFACT = "agent-review-result-"
-# A token or secret reference, in any spelling the expression syntax allows
-# ('github.token', "github['token']", 'secrets.X', "secrets['X']").
+# A token or secret reference by name ('GH_TOKEN', 'github.token', "github['token']",
+# 'secrets.X', "secrets['X']"). 'context_refs' also catches the forms that read
+# a whole context.
 TOKEN_REF = re.compile(r"GH_TOKEN|GITHUB_TOKEN|github\s*(?:\.\s*token|\[\s*['\"]token)|secrets\s*[.\[]", re.IGNORECASE)
+# A use of the 'github' or 'secrets' context, with the property it reads if
+# it names one ('github.event', "github['event']"). Not a property ('x.github')
+# or a string literal ("'github'").
+CONTEXT_REF = re.compile(
+    r"(?<![\w.'-])(github|secrets)\b(?:\s*\.\s*([A-Za-z_][\w-]*)|\s*\[\s*'([^']*)'\s*\])?", re.IGNORECASE
+)
+
+
+def context_refs(value: str) -> list[str]:
+    """The uses of a context in ``value`` that can read a secret or the token.
+
+    An allowlist: every use of 'secrets', and every use of 'github' except
+    a named property other than 'token'. 'toJSON(github)', 'github' and
+    'github.*' hold the token too. Context and property names ignore case,
+    as in GitHub's expressions. Fails closed on prose that names a context.
+    """
+    refs = []
+    for match in CONTEXT_REF.finditer(value):
+        name = match.group(2) or match.group(3)
+        if match.group(1).lower() == "secrets" or name is None or name.lower() == "token":
+            refs.append(match.group(0))
+    return refs
+
+
+def secret_refs(value: str) -> list[str]:
+    """The uses of the 'secrets' context in ``value``."""
+    return [ref for ref in context_refs(value) if ref[:7].lower() == "secrets"]
+
+
 # Files whose lines become the environment or PATH of every later step.
 STEP_STATE_FILES = ("GITHUB_ENV", "GITHUB_PATH")
 
 
 def _token_problems(where: str, node: Any, path: tuple[str, ...] = ()) -> list[str]:
-    return [
-        f"{where}: token reference {match.group(0)!r} in {'/'.join(found)}"
-        for found, value in [*strings(node, path), *_keys(node, path)]
+    found = [
+        (key_path, match.group(0))
+        for key_path, value in [*strings(node, path), *_keys(node, path)]
         for match in TOKEN_REF.finditer(value)
     ]
+    found += [(key_path, ref) for key_path, value in strings(node, path) for ref in context_refs(value)]
+    return [f"{where}: token reference {ref!r} in {'/'.join(key_path)}" for key_path, ref in dict.fromkeys(found)]
 
 
 def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:
@@ -361,7 +393,8 @@ def _keys(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ..
 def post_sandbox_problems(workflow: Mapping[str, Any]) -> list[str]:
     """The steps after the agent's run ('id: agent') in both review jobs treat the host as tainted.
 
-    No token or secret reference, in those steps or in what they inherit:
+    No token or secret reference ('TOKEN_REF', 'context_refs'), in those
+    steps or in what they inherit:
     the workflow's and the job's 'env:' and 'defaults:', and the
     $GITHUB_ENV and $GITHUB_PATH files, which no step of the job that holds
     a token may name; every 'run:' step uses the fixed shell and
@@ -418,25 +451,51 @@ AWF_OUTPUT_FILTER = "| /usr/bin/sed -u -e 's/\\r//g' -e 's/\\x00//g' -e 's/##\\[
 DIAG_FILTER = "sed -e 's/\\x00//g' -e 's/##\\[/#\\xe2\\x80\\x8b#[/g' -e \"s/^/${ADAPTER_NAME:-harness}| /\" >&2"
 
 
+AWF_CALL = '"${AWF_BIN}"'
+AWF_COMMAND_END = " 2>&1 \\"
+
+
+def _awf_call_problems(where: str, script: str) -> list[str]:
+    """Each 'awf' call continues to a '-- …  2>&1 \\' line followed by exactly the filter line."""
+    problems = []
+    lines = script.split("\n")
+    for number, line in enumerate(lines):
+        if AWF_CALL not in line:
+            continue
+        end = number
+        while end < len(lines) and not lines[end].strip().startswith("-- ") and lines[end].endswith(" \\"):
+            end += 1
+        command = lines[end].strip() if end < len(lines) else ""
+        if not command.startswith("-- "):
+            problems.append(f"{where}: the awf call on line {number + 1} has no '-- ' command line")
+        elif not command.endswith(AWF_COMMAND_END):
+            problems.append(f"{where}: the awf command does not end with '{AWF_COMMAND_END}' (stderr unfiltered)")
+        elif not (end + 1 < len(lines) and lines[end + 1].strip() == AWF_OUTPUT_FILTER):
+            problems.append(f"{where}: the awf command is not followed by '{AWF_OUTPUT_FILTER}'")
+    return problems
+
+
+def _diag_problems(common_sh: str) -> list[str]:
+    """'diag' is one pipeline that ends with exactly the filter, its only output."""
+    body = re.search(r"^diag\(\) \{\n(.*?)\n\}$", common_sh, re.MULTILINE | re.DOTALL)
+    lines = [line.strip() for line in body.group(1).split("\n")] if body else []
+    if not lines or lines[-1] != DIAG_FILTER or not all(line.endswith("|") for line in lines[:-1]):
+        return [f"harnesses/common.sh: 'diag' is not a pipeline that ends with '{DIAG_FILTER}'"]
+    return []
+
+
 def sandbox_output_problems(workflow: Mapping[str, Any], common_sh: str) -> list[str]:
-    """Every 'awf' call in agent-review.yml, and 'diag' in common.sh, filters its output."""
+    """Every 'awf' call in agent-review.yml, and 'diag' in common.sh, filters all its output."""
     problems = []
     awf_steps = 0
     for job_id, _, step_name, script in run_scripts(workflow):
-        if '"${AWF_BIN}"' not in script:
+        if AWF_CALL not in script:
             continue
         awf_steps += 1
-        lines = script.split("\n")
-        for number, line in enumerate(lines):
-            if line.strip().startswith("-- ") and not (
-                number + 1 < len(lines) and lines[number + 1].strip() == AWF_OUTPUT_FILTER
-            ):
-                problems.append(f"{job_id}/{step_name}: the awf command is not followed by '{AWF_OUTPUT_FILTER}'")
+        problems += _awf_call_problems(f"{job_id}/{step_name}", script)
     if awf_steps == 0:
         problems.append("no awf call found")
-    if DIAG_FILTER not in common_sh:
-        problems.append(f"harnesses/common.sh: 'diag' does not end with '{DIAG_FILTER}'")
-    return problems
+    return problems + _diag_problems(common_sh)
 
 
 # --- The collect gate -------------------------------------------------------------

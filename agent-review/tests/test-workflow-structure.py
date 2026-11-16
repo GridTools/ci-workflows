@@ -24,6 +24,7 @@ from workflow_structure import (
     python_word_problems,
     repository,
     sandbox_output_problems,
+    secret_refs,
     shebang_problems,
     shell_python_problems,
     strings,
@@ -73,7 +74,7 @@ def main() -> int:
             continue
         refs = []
         for path, value in strings(job):
-            if "secrets." not in value:
+            if not secret_refs(value):
                 continue
             step_name = job["steps"][int(path[1])].get("name") if path[0] == "steps" else None
             if (job_id, step_name, path[-1], value) == SHARED_KEY_CHECK:
