@@ -29,12 +29,9 @@ the run).
 Exit codes: 0 review written (or, for ``fetch``, the checkout prepared), 2
 the harness ran but produced no review, 1 anything else.
 
-The harness contract (harnesses/README.md): ``bash <adapter>/run.sh`` under
-``timeout``, in the checkout, with ``PROMPT_FILE``, ``REPO_DIR``,
-``OUT_DIR``, ``CONTEXT_DIR``, ``MODEL``, ``HARNESS_PREFIX``, ``PR_NUMBER``
-and ``STUB_PADDING_KIB`` set, and the run's ``HOME``, ``TMPDIR`` and forced
-``GIT_*`` variables on top of the inherited environment; exit 0 means a
-review, 2 none.
+The harness runs as ``bash <adapter>/run.sh`` under ``timeout``, in the
+checkout; its environment and exit codes are the adapter contract in
+harnesses/README.md.
 """
 
 import contextlib
