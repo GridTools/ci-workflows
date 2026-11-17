@@ -4,8 +4,8 @@ The reusable `Agent Review` workflow ([`.github/workflows/agent-review.yml`](../
 
 An adopting repository adds a small **caller workflow** that calls this one pinned by commit SHA, and keeps its own triggers, environment, key, label and event policy. The design is in [ADR 0001](adr/0001-sandboxed-agent-pr-review.md) (the sandboxed review) and [ADR 0002](adr/0002-reusable-workflow.md) (packaging it as a reusable workflow).
 
-> [!WARNING]
-> **Pre-release.** The pipeline was security-reviewed as an in-repository workflow, before it moved here. A spike with user-owned repositories validated the reusable form's GitHub behaviour (secrets, environments, permission ceilings, pins) with the spike's own code, not with this repository's code. This code has run end to end only through this repository's self-test (a local call, `stub` harness, keyless job); the one cross-repository run so far stopped in `authorize`. The keyed job, opencode and Pi inside AWF in this layout, and every path in [Release checklist](#release-checklist) are untested here. Also never exercised end to end: a real `pull_request_target` or `workflow_dispatch` run in an organization repository, a non-writer being denied, a call from another organization, and the key-isolation canaries with the final AWF flags (they ran in separate configurations in the AWF probe). In the hostile-PR suite the real harnesses did not attempt the injected attacks, so those runs show that the models complied with the prompt, not that the sandbox contained them; containment rests on the canary and offline tests.
+> [!NOTE]
+> **Status: release candidate of `v0.1.0`.** The pipeline was security-reviewed as an in-repository workflow, before it moved here. The [release checklist](#release-checklist) has since been run from a separate test caller on the release candidate: keyed `opencode` and Pi reviews, the label path with real posts, a fork PR by an account without write access carrying hostile content, a git-level fixture and an audit run. **Not verified**: the labeller-denial case (it needs an organization repository, where the `triage` role exists), invariant 6 end to end with files named in the addendum, and the key-isolation canaries with the final AWF flags (they ran in separate configurations in the AWF probe). In the hostile fork PR the harnesses named the injected text and followed none of it, which shows the models' behaviour, not that the sandbox contained an attack; containment rests on the canary and offline tests.
 
 ## Calling it
 
@@ -17,7 +17,8 @@ name: Agent Review
 on:
   # Not 'pull_request': fork PRs get no secrets there. No 'issue_comment'
   # and no 'synchronize'. Automatic review of writers' PRs
-  # ('opened', 'reopened', 'ready_for_review') can be added later.
+  # ('opened', 'reopened', 'ready_for_review') can be added later, together
+  # with the job 'if' (see Usage).
   pull_request_target:
     types: [labeled]
   workflow_dispatch:
@@ -82,6 +83,10 @@ Optionally, a **test job** for the caller's own pull requests (see [Caller test 
       pull-requests: write
     with:
       harness: stub # any other harness is rejected under 'pull_request'
+      # Not used by the stub. To try that rejection with another harness
+      # (checklist 3.2), a model must be given: otherwise the model check
+      # fails first ("No model given ...") and the event rule is never reached.
+      model: ${{ vars.AGENT_REVIEW_MODEL }}
       pr: ${{ github.event.pull_request.number }}
       project_name: MyProject
       rule_files: |
@@ -112,7 +117,7 @@ Optionally, a **test job** for the caller's own pull requests (see [Caller test 
 | `requests_per_minute` | 30 | ceiling 30 |
 | `max_turns` | 80 | AWF `maxTurns`; ceiling 80 |
 | `harness_timeout_minutes` | 20 | ceiling 20 |
-| `upload_audit` | `false` | upload AWF's audit and proxy logs as an artifact (readable by any signed-in user in a public repository) |
+| `upload_audit` | `false` | upload AWF's audit and proxy logs as an artifact (readable by any signed-in user in a public repository; see [Troubleshooting](#troubleshooting)) |
 | `test_repository` | `""` | self-test of this repository only (see [Testing changes](#testing-changes)); rejected for any other caller |
 
 Callers can lower the caps, never raise them: `authorize` rejects larger values, zero and non-integers (unit-tested), and the review job clamps them to [`awf.yaml`](../agent-review/awf.yaml) again (checked in the self-test's log).
@@ -121,7 +126,7 @@ Callers can lower the caps, never raise them: `authorize` rejects larger values,
 
 ## Required settings in the calling repository
 
-1. **The `agent-review` environment, restricted to the default branch** (**Settings → Environments → agent-review → Deployment branches and tags → Selected branches**: the default branch only), holding the secret **`AGENT_REVIEW_INFERENCE_API_KEY`**. Only the keyed `review` job (harnesses `opencode`, `pi`) uses the environment; its branch rule is evaluated against the caller run's ref, so `pull_request_target` and dispatches from the default branch pass while branch workflows and dispatches of other refs are denied (verified in the spike). Each keyed run records a deployment in the calling repository; `stub` runs use the keyless job, request no environment and record none. **Never** create a repository- or organization-level secret of the same name: the caller's mapping is evaluated per called job, and in the jobs without the environment it would then yield that other secret's value; `authorize` fails if it does. Turn off **Allow administrators to bypass configured protection rules** on the environment if it is on (`can_admins_bypass`); whether that bypass covers the branch rule is untested, and turning it off costs nothing. **Never** pass another environment name for tests: GitHub creates an unknown environment on first use, unprotected.
+1. **The `agent-review` environment, restricted to the default branch** (**Settings → Environments → agent-review → Deployment branches and tags → Selected branches**: the default branch only), holding the secret **`AGENT_REVIEW_INFERENCE_API_KEY`**. Only the keyed `review` job (harnesses `opencode`, `pi`) uses the environment; its branch rule is evaluated against the caller run's ref, so `pull_request_target` and dispatches from the default branch pass while branch workflows and dispatches of other refs are denied (verified in the spike). Each keyed run records a deployment in the calling repository; `stub` runs use the keyless job, request no environment and record none. A keyed attempt that the environment refuses (a dispatch of another ref, say) still records a deployment, with status `failure`. The deployment's ref is the **PR's head branch** for a label-path (`pull_request_target`) run, which shows as a "deployed" entry on the PR's timeline, and the **dispatched branch** (the default branch, for a keyed run) for a `workflow_dispatch` run. **Never** create a repository- or organization-level secret of the same name: the caller's mapping is evaluated per called job, and in the jobs without the environment it would then yield that other secret's value; `authorize` fails if it does. Turn off **Allow administrators to bypass configured protection rules** on the environment if it is on (`can_admins_bypass`); whether that bypass covers the branch rule is untested, and turning it off costs nothing. **Never** pass another environment name for tests: GitHub creates an unknown environment on first use, unprotected.
 2. **A dedicated CSCS key** in that secret, never shared with PR Agent or other tools: created in the [inference UI](https://ui.inference.cscs.ch/login) for this workflow alone, with its own token budget and reset period, and restricted to the configured model. **Its budget is the only hard spending cap** (see [What remains risky](#what-remains-risky)). A CSCS key also works for `/v1/completions`, `/v1/responses` and `/v1/messages`, and signs in to the inference UI.
 3. **An Actions event policy** (**Settings → Actions → Policies**, or `POST /repos/{owner}/{repo}/actions/policies`) scoped by workflow path to the **caller's** file, `.github/workflows/agent-review.yml`, allowing **`pull_request_target` and `workflow_dispatch`** (and **`pull_request`** if the caller has the test job of [Caller test mode](#caller-test-mode)). GitHub blocks `pull_request_target` by default in public repositories from **2 December 2026**. The policy matches the caller's file, never this repository's; `workflow_call` need not be listed; `allowed_events` is an exhaustive allowlist (verified in the spike). Add it even if another policy exists in the repository. `enforcement: evaluate` can be used to dry-run it.
 4. Variables `AGENT_REVIEW_HARNESS` (`opencode`) and `AGENT_REVIEW_MODEL` (`zai-org/GLM-5.3-Flash`), and the label `agent-review`. Map no other input from a variable (see [What remains risky](#what-remains-risky)).
@@ -132,7 +137,7 @@ Test with **Run workflow** in dry-run mode first (`stub`, then the real harness)
 
 ### Pinning and updating
 
-Pin only a commit that is on this repository's `main` and carries a release tag; write the tag as a comment. A commit pushed only to a fork of this repository can be fetched through this repository's name, and a tag can point at an unreviewed side branch, so check each new pin before merging the update:
+Pin only a commit that is on this repository's `main` and carries a release tag; write the tag as a comment. A commit pushed only to a fork of this repository resolves through this repository's name in the REST API (commits, tarball). In testing, Actions refused such a commit as a reusable-workflow pin ("workflow was not found"), but that behaviour may change, so the caller-side check stays required as defence in depth. A tag can point at an unreviewed side branch, and it can resolve to a different commit even between attempts (re-runs) of the same run, so **pin full SHAs** and check each new pin before merging the update:
 
 ```bash
 gh api repos/GridTools/ci-workflows/compare/main...<sha> --jq .status   # must print 'identical' or 'behind'
@@ -146,7 +151,18 @@ or run [zizmor](https://docs.zizmor.sh/) with its online `impostor-commit` and `
 - Only these `pull_request_target` actions start a review: `labeled` (with the configured label), `opened`, `reopened` and `ready_for_review`; any other action the caller's `types` lets through ends `authorize` with a notice. The trigger's `types` should still list only the ones wanted.
 - Anyone with write access can request a review of any PR not opened by a bot, including a fork or draft PR, by adding the label. The **labeller's** permission is checked, not the author's. To review again, remove and re-add the label. Pushes to the PR do not trigger a review.
 - **Run workflow** (`workflow_dispatch`) reviews a given PR number, optionally with another harness or as a dry run. A keyed harness gets the key only when dispatched from the default branch (environment rule). The `stub` uses no environment, so a writer can dispatch it from any branch: it has no key and posts at most its fixed test review.
-- If the caller enables the automatic types (`opened`, `reopened`, `ready_for_review`), the PR **author's** permission is checked and drafts are skipped. A `triage` user can then close and reopen a writer's PR to start one run per cycle.
+- If the caller enables the automatic types (`opened`, `reopened`, `ready_for_review`), the PR **author's** permission is checked. A `triage` user can then close and reopen a writer's PR to start one run per cycle. The documented job `if` admits only dispatches and the label, so extend it together with the trigger's `types`, or those runs are skipped at the caller:
+
+  ```yaml
+  jobs:
+    review:
+      if: >-
+        github.event_name == 'workflow_dispatch'
+        || github.event.action != 'labeled'
+        || github.event.label.name == 'agent-review'
+  ```
+
+  Drafts are skipped on the automatic types with no notice (the filter in the first job: the run shows the job as skipped); `ready_for_review` starts the review once the PR is marked ready. A draft can still be reviewed by adding the label.
 - `triage` is not enough to request a review: the permission API reports it as `read`.
 
 Each harness keeps one comment per PR, updated in place by later runs. The comment names the harness, its version, the model and the reviewed commit; pushes after that commit are not reviewed.
@@ -206,13 +222,25 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 - **Live logs**: the review step's log shows the agent's output (prefixed) while it runs; it carries no secret.
 - **Central changes reach every caller that updates its pin.** Callers pin a full SHA and review Dependabot's update PRs; releases flag new permissions, inputs, ceilings, endpoints, harness pins and AWF versions as breaking. The protection of `main` (pull request with an approval, no force pushes) does not by itself protect what callers pin: tags, releases and commits pushed only to a fork are outside it, and required status checks are a separate setting. Callers must check each pin ([Pinning and updating](#pinning-and-updating)).
 - **Compromise of this repository's `main` or of one admin account.** Admins cannot bypass the ruleset but can edit it. A SHA-pinned caller is unaffected until it updates its pin, so the review of the pin update is the only gate, and the central diff is not shown in the caller's PR. A tag- or branch-pinned caller is hit on its next run. A malicious central commit gets, in a caller: the inference key (in `review`), `pull-requests: write` (in `publish`), and write access to the caller's Actions cache in the default-branch scope under `pull_request_target`, which other workflows restore. It gets no other secret, thanks to the explicit mapping.
-- **Tag and branch pins.** The ref is resolved once per run; every job fetches by SHA and checks that it runs the recorded commit, so one run never mixes commits (verified in the spike for tag and branch pins). Which commit a re-run of a failed job uses after the tag moved is not verified; the check fails closed either way.
+- **Tag and branch pins.** The ref is resolved once per run; every job fetches by SHA and checks that it runs the recorded commit, so one run never mixes commits (verified in the spike for tag and branch pins). A re-run after the tag moved re-resolves the called workflow's tag (it runs the moved commit) while keeping the caller's commit, so a tag pin is not reproducible, not even across attempts of one run; only SHA pins are.
 - **Inputs are as trusted as the caller's workflow file** on its default branch. Never derive `environment`, `model`, `rule_files`, `instruction_files`, `prompt_addendum`, `label` or `api_base` from an event payload, a dispatch input or a repository variable: whoever can change a variable needs no review. The endpoint allowlist limits where the key can go, but not the other inputs.
 - **Caller test mode** (`pull_request`, `stub`): the caller's workflow file, inputs, rule files and addendum are PR content there, and fork PRs are protected by GitHub's rules (read-only token, no secrets), not by this workflow. It proves the plumbing only, never the reset invariant.
 - **The self-test's "nothing can be spent or posted"** holds inside the reviewed file: stub, keyless job, forced dry run. For a fork or branch PR of this repository the file itself is the PR's, so the guarantee there is GitHub's fork rules plus the absence of secrets in this repository, not these checks. **Never store a key or any secret in this repository**: keyed tests run from a separate test caller.
 - **One keyed review per PR at a time**: the keyed job's concurrency group queues a second run; a newer queued run replaces an older queued one, which GitHub cancels.
 - **AWF updates are manual**: Dependabot ignores `github/gh-aw-firewall` ([`dependabot.yml`](../.github/dependabot.yml)), so its security fixes reach this workflow only when a maintainer bumps it; watch its releases and advisories.
 - `@`, `&`, `]:` and `<` before a letter, `/`, `!` or `?` are neutralised everywhere, including code blocks, so a Python decorator or `std::vector<int>` copied from a review contains an invisible character, and character references show literally.
+
+## Troubleshooting
+
+**The token-usage table** in the run summary of the keyed `review` job counts the rows of AWF's `token-usage.jsonl`: calls for which the API proxy received **response headers**. "Failed calls" are those rows with an HTTP status of 400 or more. It does not include a request rejected upstream with an authentication error (for example `403` for an invalid key) or one that timed out without headers. Diagnose those from the harness's error output in the `Run the review in the sandbox` log, or with an audit run.
+
+**Audit and proxy logs** (`upload_audit: true`) show what the sandbox connected to and which model was called. AWF redacts the key in the compose environment and logs no request headers, but the artifact (kept 7 days) is readable by any signed-in user of a public repository, so treat it as public. Never set the input in the standing caller configuration. Pass it for one run, through a dispatch input mapped to `upload_audit`, or a separate dispatch-only workflow that calls this one with the same pin, `dry_run: true` and the same environment and secret mapping.
+
+Known limitations of `v0.1.0` (no workaround in the workflow):
+
+- **Inference stalls.** Requests to the inference service sometimes hang for about 300 s before a retry succeeds. A review of a few model calls can then take 17 to 19 minutes, close to the 20-minute harness limit; one more stall ends in the "no review" warning (the run stays green). Re-request the review, or try again when the service is faster.
+- **Environment denial.** When the environment refuses the keyed job, `publish` still warns that the agent produced no review and points at sandbox logs, which do not exist. The cause is the environment rule (the branch rule, or an environment that does not exist or is misconfigured), shown on the `review` job and as a failed deployment, not anything in the sandbox; see [Required settings](#required-settings-in-the-calling-repository), item 1.
+- **The reset logs no per-file list.** `run-review` logs that the rule files and the files the addendum names are their base versions, but not which instruction files it removed or kept as data.
 
 ## Configuration notes
 
@@ -252,7 +280,7 @@ The self-test is a local call, where `job.workflow_repository` and `job.workflow
 
 ### Caller test mode
 
-Any caller may call the workflow under `pull_request` with the **`stub`** harness only (the job in [Calling it](#calling-it)): the dry run is forced by the event name, there is no writer check, and the run uses the keyless job, so it needs no key and no environment and is not limited to the default branch (expected from the design; not yet run from another repository, and not observed for fork PRs, whose read-only token might fail the permission ceiling at startup). If the caller's Actions event policy for its workflow file exists, it must list `pull_request` too: `allowed_events` is an exhaustive allowlist. A keyed harness is rejected under `pull_request` (and under every event but `pull_request_target` and `workflow_dispatch`), and `test_repository` stays limited to this repository. A notice says what follows: the caller's workflow file, its inputs, rule files and addendum are **PR content** in this mode (the caller's `github.workflow_sha` is the PR's merge commit). The mode proves the plumbing (the cross-repository call, the inputs, the addendum fetch, the sandbox, the dry-run rendering), never the reset invariant.
+Any caller may call the workflow under `pull_request` with the **`stub`** harness only (the job in [Calling it](#calling-it)): the dry run is forced by the event name, there is no writer check, and the run uses the keyless job, so it needs no key and no environment and is not limited to the default branch (run from another repository in the release validation; not observed for fork PRs, whose read-only token might fail the permission ceiling at startup). If the caller's Actions event policy for its workflow file exists, it must list `pull_request` too: `allowed_events` is an exhaustive allowlist. A keyed harness is rejected under `pull_request` (and under every event but `pull_request_target` and `workflow_dispatch`), and `test_repository` stays limited to this repository. A notice says what follows: the caller's workflow file, its inputs, rule files and addendum are **PR content** in this mode (the caller's `github.workflow_sha` is the PR's merge commit). The mode proves the plumbing (the cross-repository call, the inputs, the addendum fetch, the sandbox, the dry-run rendering), never the reset invariant.
 
 ## Releases
 
@@ -266,9 +294,9 @@ Before tagging (`v0.1.0` and every later release):
 2. Repository settings are in place: tag ruleset for `v*` (restricted creation, no update, no deletion), immutable releases, the self-test jobs as required status checks on `main`, no repository or organization secret available to this repository.
 3. Cross-repository tests from a **separate test caller repository** pinned to the release candidate's SHA on `main` (its own `agent-review` environment, default branch only, admins not exempt, with a dedicated low-budget key; never a key here; an Actions event policy for its workflow file allowing `pull_request_target`, `workflow_dispatch` and `pull_request`, without which `pull_request_target` is blocked from 2 December 2026; no forced dry run left in its workflow file):
    1. `workflow_dispatch` dry run with `stub` from the default branch: the notice shows `workflow GridTools/ci-workflows@<sha>; caller <test repo>@<sha>` with distinct values, the keyless job runs, no deployment is recorded.
-   2. `pull_request` caller test mode with `stub`: dry run forced, the PR-content notice; with `opencode`: rejected in `authorize`.
+   2. `pull_request` caller test mode with `stub`: dry run forced, the PR-content notice; with `opencode`: rejected in `authorize` by the event rule, which needs the test job to pass a `model` (otherwise the model check fires first: "No model given ...").
    3. The label path on a fixture PR (`pull_request_target`, `labeled`), with a writer: a real post through `/usr/bin/gh` under the publish steps' fixed `PATH: /usr/bin:/bin`, updated in place on a second run.
-   4. A non-writer adding the label (or the PR's author without write) is denied with a notice.
+   4. A non-writer adding the label (or the PR's author without write) is denied with a notice. The labeller variant needs an organization repository, where the `triage` role exists (a read-only user cannot add labels); in a user-owned repository only the PR-author variant (an automatic type, with the job `if` extended as in [Usage](#usage)) can be tested.
    5. A keyed dispatch from a branch other than the default: denied by the environment rule before getting a runner.
    6. One keyed dry run per harness (`opencode`, `pi`) with the dedicated key: a rendered review, the token-usage table, `OpenAI=true` only in the review run.
    7. A shared repository secret named like the mapped one makes `authorize` fail (then delete it).

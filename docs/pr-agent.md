@@ -4,8 +4,8 @@ The reusable `PR Agent` workflow ([`.github/workflows/pr-agent.yml`](../.github/
 
 An adopting repository adds a small **caller workflow** that calls this one pinned by commit SHA, and keeps its own triggers, environment, key, event policy, `.pr_agent.toml` and review rules. The design is in [ADR 0003](adr/0003-pr-agent-reusable-workflow.md).
 
-> [!WARNING]
-> **Pre-release.** This workflow has run only through this repository's self-test (a local call in dry run, which never starts the keyed job), plus the caller tests recorded in the PR that added it (caller test mode, from another organization, with a real key: a review, a refused environment, a missing and a wrong key, forced timeouts, and the failure comment's update and removal). It ships in `v0.1.0` together with the agent review, after the [release checklist](#release-checklist). Not observed yet: real `pull_request_target` and `issue_comment` runs, and whether their deployments show on the PR timeline.
+> [!NOTE]
+> **Status: release candidate of `v0.1.0`.** The workflow has run through this repository's self-test (a local call in dry run, which never starts the keyed job) and from a separate test caller with a real key: a posted review, `pull_request_target` and `issue_comment` runs (`/review`), refusals for a non-writer's PR, a non-writer's comment and a `--` argument, a refused environment, a missing and a wrong key, forced timeouts, and the failure comment's update and removal. It ships in `v0.1.0` together with the agent review; see the [release checklist](#release-checklist).
 
 ## Calling it
 
@@ -91,6 +91,7 @@ Before merging the caller, its plumbing can be tested in [caller test mode](#cal
 - Comments with `--section.key=value` setting arguments are refused with a notice in the run: they could override the workflow's settings (see [Security invariants](#security-invariants), item 3). Since PR Agent strips quotes and backslashes, `--` is refused anywhere it does not directly follow a letter, digit or `_` (`a--b` in a question is fine; `"--x"` is not). Single-dash arguments such as `/review -i` are fine.
 - Any comment from a writer that starts with `/` runs the `pr-agent` job: a `/word` that is not a PR Agent command makes PR Agent fail, which posts the failure comment.
 - `triage` is not enough: the permission API reports it as `read`. `maintain` reports as `write`.
+- A later `/review` updates the persistent review comment in place and adds a short "Persistent review updated to latest commit" comment; it does not post a second full review.
 
 ## How it works
 
@@ -132,14 +133,15 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 - The token limits apply to every model in the chain, so they must fit the smallest one: the output reserve is sent as `max_tokens`, which a model with a lower output limit rejects. Too small an output reserve makes reasoning models return empty responses (`finish_reason: length`; 32768 was too small for GLM models). Check a fallback before adding it, since it is only reached when the models before it fail.
 - The step limit is `ceil(chain × ai_timeout / 60) + 2` minutes, so a model that times out is not retried: the next one is tried. `Resolve models` rejects a chain whose step limit plus two minutes exceeds the job's 45 minutes, since a job timeout is a cancellation, which `continue-on-error` does not cover. A rejected request (429, 5xx) is retried twice on the same model first (`num_retries`); slow rejections can still use up the step limit, which the failure comment then reports.
 - `enable_large_pr_chunking` in `.pr_agent.toml` sends the chunks in parallel, so it does not extend the step time.
-- `output_run_details = true` in `.pr_agent.toml` makes the review name the model that answered, so a fallback answer is visible.
-- Typical runs take 1.5–3 minutes with `GLM-5.3-Flash` and 13–17k input tokens.
+- `output_run_details = true` in `.pr_agent.toml` (a `[config]` key, as is `repo_context_files`) makes the review name the model that answered, so a fallback answer is visible. It also shows the tokens, the time and the number of AI calls.
+- Run time and tokens depend on the size of the PR and on the endpoint's latency. A tiny PR takes about 2k input tokens and one call; larger diffs and the review rules in `repo_context_files` raise it to the low tens of thousands. In periods of slow inference a single call takes several minutes (5 to 6 in testing), so a run of a few minutes is not a failure; size `ai_timeout` for the slowest case.
 
 ### Reading a run's log
 
+- Deployments depend on the event. A `pull_request_target` run's deployment has the PR's head branch as ref and appears on the PR's timeline. An `issue_comment` run's deployment has the default branch as ref and does not appear on the PR timeline; its checks attach to the default branch's head commit, not to the PR (which is why the failure comment exists). It is visible under the repository's deployments or the environment's page.
 - `Applying repo settings (sections: [...])` means `.pr_agent.toml` was applied; the bare `Applying repo settings` appears in every run.
 - A `403` on `GET /user` ("Could not resolve the GitHub user login") is harmless.
-- `repo_context_files` are always read from the default branch (the PR's base); missing files are skipped. `PR_AGENT_CONFIG_BRANCH` does not affect them.
+- `repo_context_files` (a `[config]` key) are always read from the default branch (the PR's base); missing files are skipped. `PR_AGENT_CONFIG_BRANCH` does not affect them.
 - Cross-repository references such as `other-org/other-repo#12` are misread as local issues and log a 404 or a sibling-allowlist warning; harmless.
 
 ## Testing changes

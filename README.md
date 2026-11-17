@@ -2,10 +2,13 @@
 
 Reusable GitHub Actions workflows that any repository can call.
 
-**Status: pre-release.** Nothing here is released yet. Both workflows ship
-together in the first release tag (`v0.1.0`); do not call them with a real
-key before it exists. See the [agent review's](docs/agent-review.md#release-checklist)
-and [PR Agent's](docs/pr-agent.md#release-checklist) release checklists.
+**Status: first release, `v0.1.0`.** Both workflows ship together in it and are
+validated from a separate test caller; the agent review's [status
+note](docs/agent-review.md) and PR Agent's [status note](docs/pr-agent.md) list
+what is not verified yet. Read each release's notes for breaking changes
+before updating a pin. See the
+[agent review's](docs/agent-review.md#release-checklist) and
+[PR Agent's](docs/pr-agent.md#release-checklist) release checklists.
 
 ## Workflows
 
@@ -29,7 +32,9 @@ jobs:
 Never call a branch (`@main`) or a moving tag: a change here would reach your
 repository unreviewed. Check every new pin, including Dependabot's, before
 merging it: a commit that exists only in a fork resolves through this
-repository's name too.
+repository's name in the REST API (Actions refused it as a pin in testing, but
+that may change), and a tag can resolve to another commit even between
+attempts of one run.
 
 ```bash
 gh api repos/GridTools/ci-workflows/compare/main...<sha> --jq .status  # 'identical' or 'behind'
