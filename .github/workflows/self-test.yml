@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # actionlint, shellcheck and file checks, hooks pinned by commit sha.
+      # The hooks of .pre-commit-config.yaml.
       - name: pre-commit
         run: pipx run pre-commit==4.7.0 run --all-files --show-diff-on-failure
 
@@ -82,8 +82,7 @@ jobs:
             echo "::endgroup::"
           done
           exit "${rc}"
-      # The workflow's structural invariants (environment, secrets,
-      # permissions, expressions in scripts, the keyless twin).
+      # The invariants listed in agent-review/tests/workflow_structure.py.
       - name: Workflow structure
         run: python3 agent-review/tests/test-workflow-structure.py
       # Offline; the '--' filter is checked against a copy of PR Agent's

@@ -9,12 +9,12 @@ name: Agent Review (reusable)
 #              (agent-review/bin/authorize); decides whether the run is keyed.
 #   prepare    downloads the pinned harness, without secrets; runs none of
 #              its code (no install scripts, no version check).
-#   review     keyed harnesses: two AWF sandbox runs: a keyless one fetches
-#              the PR from github.com, then the agent runs with no network
-#              access but the API proxy. The inference key is in ONE step's
-#              env and reaches only AWF's API-proxy sidecar. The host never
-#              touches PR content and is treated as tainted once 'awf'
-#              returns. The only job with the caller's environment.
+#   review     keyed harnesses, and the only job with the caller's
+#              environment. Two AWF sandbox runs: a keyless one fetches the
+#              PR from github.com, then the agent runs with no network access
+#              but the API proxy. The inference key is in ONE step's env and
+#              reaches only AWF's API-proxy sidecar. The host never touches
+#              PR content and is treated as tainted once 'awf' returns.
 #   review-keyless
 #              the same steps for a harness that calls no model ('stub'):
 #              no environment and no secret, so a test needs no key and no
@@ -42,9 +42,10 @@ name: Agent Review (reusable)
 # accepts only the 'pull_request_target' actions it lists, and the keyed job
 # has its own concurrency group.
 #
-# Compatibility: a new permission in any job below, a new required input, a
-# raised ceiling or a new allowed endpoint breaks callers or widens what they
-# agreed to; release it as a breaking change.
+# Compatibility: a change that breaks callers or widens what they agreed to
+# (a new permission in any job below, a new required input, a raised ceiling,
+# a new allowed endpoint) is a breaking release (docs/agent-review.md,
+# Releases).
 
 on:
   workflow_call:
@@ -321,10 +322,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The keyed review: the only job with the caller's environment, and the
-  # only one that can read the key. 'review-keyless' below runs the same
-  # steps (YAML aliases) without environment and without any 'secrets.'
-  # reference; tests/test-workflow-structure.py checks both properties.
+  # The only job with the caller's environment, so the only one that can
+  # read the key. 'review-keyless' runs the same steps (YAML aliases) with
+  # no environment and no 'secrets.' reference; the structure test checks
+  # both properties.
   review:
     needs: [authorize, prepare]
     # 'authorize' decides 'keyed' from its harness allowlist, never from an
@@ -672,8 +673,8 @@ jobs:
             | /usr/bin/tee -a "${GITHUB_STEP_SUMMARY}"
 
       # Off by default: artifacts of public repositories are downloadable by
-      # any signed-in user. The Phase 0 probe found no key or auth header in
-      # the audit files or the proxy logs.
+      # any signed-in user. The AWF probe found no key or auth header in the
+      # audit files or the proxy logs.
       - &audit-readable
         name: Make the AWF audit log readable
         if: always() && steps.key.outputs.skipped != 'true' && inputs.upload_audit
@@ -698,10 +699,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # The same steps for a harness that calls no model: no 'environment:', no
-  # 'secrets.' reference, so neither a key nor a deployment, and it runs on
-  # any ref (a caller's PR, a branch dispatch). Only the key check and the
-  # agent step's environment differ from 'review'.
+  # No 'environment:' and no 'secrets.' reference, so neither a key nor a
+  # deployment, and it runs on any ref (a caller's PR, a branch dispatch).
+  # Only the key check and the agent step's 'env:' differ from 'review'.
   review-keyless:
     needs: [authorize, prepare]
     if: needs.authorize.outputs.allowed == 'true' && needs.authorize.outputs.keyed == 'false'
