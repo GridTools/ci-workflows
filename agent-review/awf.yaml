@@ -10,10 +10,10 @@
 # --container-workdir) and image digests (--image-tag) are passed as
 # command-line flags.
 #
-# Verified by a probe on AWF v0.29.12 (runs on a fork, listed in the pull
-# request that added this file): the dummy key is unreadable in the sandbox in every mode; the
-# CSCS path mapping; the model pattern format; 'maxTurns' and
-# 'rateLimiting' answer 429; 'agentTimeout' ends the agent with exit 124.
+# Verified by a probe on AWF v0.29.12: a dummy key is unreadable in the
+# sandbox in every mode; the CSCS path mapping; the model pattern format;
+# 'maxTurns' and 'rateLimiting' answer 429; 'agentTimeout' ends the agent
+# with exit 124.
 # The bounds the agent can actually hit are in the 'Spend' notes below.
 
 network:
@@ -47,10 +47,10 @@ apiProxy:
   # sidecar otherwise makes ~7 GETs per run to api.github.com (the
   # github/gh-aw-firewall 'catalogue-data' branch) to refresh its pricing
   # snapshot. Those carry no data about the run (GET only, no Authorization),
-  # but we do not use AWF's AI-credit accounting (see 'Spend' below), so the
-  # egress and the up-to-5 s first-request wait are
-  # pointless. Pricing then falls back to the bundled tables.
-  # (AWF v0.29.12: containers/api-proxy/catalogue-loader.js:91,237.)
+  # but AWF's AI-credit accounting is not used (see 'Spend' below), so the
+  # egress and the up-to-5 s first-request wait are pointless. Pricing then
+  # falls back to the bundled tables (AWF v0.29.12,
+  # containers/api-proxy/catalogue-loader.js).
   modelCatalogue:
     enabled: false
   # Spend. The only hard cap is the dedicated CSCS key's own token budget;
@@ -86,8 +86,8 @@ container:
   # one triggers first and the result is still collected.
   agentTimeout: 25
   memoryLimit: 6g
-  # TODO(phase0): pin images by digest with 'container.images' if passing
-  # the setup action's 'image-tag' output (with digests) is not enough.
+  # No 'container.images': the images are pinned by digest through the
+  # setup action's 'image-tag' output, passed as '--image-tag'.
 
 filesystem:
   # Placeholder; the 'review' job sets it to the review workspace, the only

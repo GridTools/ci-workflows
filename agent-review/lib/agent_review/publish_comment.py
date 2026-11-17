@@ -58,7 +58,7 @@ COMMENT_ID = validate.pattern(r"[1-9][0-9]{0,19}")
 # comment adds at most about 1 KB to the listing (300 comments with 60 KB
 # first lines would otherwise pass runner's output cap). Many thousands of
 # comments still can, or hit the time limit: 'post' then fails. Longer
-# than any marker (at most 150 characters), so the comparison stays exact.
+# than any marker ('post' checks it), so the comparison stays exact.
 FIRST_LINE_CHARS = 256
 LISTING_JQ = f'.[] | [.id, .user.login, (.body | split("\\n") | .[0] | .[0:{FIRST_LINE_CHARS}])] | @tsv'
 ASCII_WHITESPACE = " \t\n\v\f\r"

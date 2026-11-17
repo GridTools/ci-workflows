@@ -419,7 +419,7 @@ def test_container_specs() -> None:
 
 @pytest.mark.parametrize("addendum", [b"{\xff{PR_BODY}}", b"notes \xc3"])
 def test_load_config_rejects_an_addendum_that_is_not_utf8(tmp_path: pathlib.Path, addendum: bytes) -> None:
-    """'{\\xff{PR_BODY}}' passed a byte check, then clipping dropped the byte and formed a placeholder."""
+    """'{\\xff{PR_BODY}}' passes a byte check for '{{'; clipping then drops the byte and forms a placeholder."""
     with pytest.raises(Fatal, match=r"prompt-addendum\.md' is not valid UTF-8\."):
         reset.load_config(make_root(tmp_path, addendum=addendum))
 

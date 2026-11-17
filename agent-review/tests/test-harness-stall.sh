@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # The adapters' request timeouts against an inference service that stalls
 # (fake_inference.py): a request that stalls must end and be retried, a
-# slow but live stream must not be cut, and a run must still get through
-# long waits: a request answered only after 185 s (as in the v0.1.0 release
-# validation), the same wait between the headers and the first event of a
-# stream, and a service that answers nothing for 17 minutes (13 in the
-# validation; more than Pi's default of 3 retries can sit out, so the case
-# fails if its raised retry count is lost).
+# slow but live stream must not be cut, and a run must get through long
+# waits: a request answered only after 185 s (a wait seen with the real
+# service), the same wait between the headers and the first event of a
+# stream, and a service that answers nothing for 17 minutes (13 were seen;
+# more than Pi's default of 3 retries can sit out, so the case fails if its
+# raised retry count is lost).
 #
 # Usage: test-harness-stall.sh [--fast] [opencode] [pi]
 #
@@ -18,8 +18,8 @@
 #
 # By default the adapters run unchanged and the cases take the real times
 # (about 18 minutes; the cases run in parallel). --fast runs copies of the
-# adapters with every timeout and retry delay divided by 30 (about 1 minute): it checks the
-# behaviour, not the values.
+# adapters with every timeout and retry delay divided by 30 (about 1
+# minute): it checks the behaviour, not the values.
 
 set -uo pipefail
 # shellcheck source=lib.sh
@@ -62,7 +62,7 @@ if [ "${SCALE}" -ne 1 ]; then
 fi
 
 # Seconds: how long each harness waits for headers and between chunks; the
-# wait of the validation's slow answer; and a silence longer than 4
+# 185 s of the slow answer; and a silence longer than 4
 # attempts of Pi's timeout (3 retries, Pi's default) but shorter than what
 # either harness must sit out.
 OPENCODE_HEADER=$(($(constant opencode HEADER_TIMEOUT_MS) / 1000))

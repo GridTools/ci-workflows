@@ -1,4 +1,4 @@
-"""Structural checks of the agent review workflow (security review, M3/S7).
+"""Structural checks of the agent review workflow.
 
 The checks and what they enforce are described in workflow_structure.py.
 Reads the workflow files with YAML aliases resolved (PyYAML), the way GitHub

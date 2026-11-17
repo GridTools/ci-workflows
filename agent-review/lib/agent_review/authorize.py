@@ -298,7 +298,7 @@ def choose_model(keyed: bool, model: str, harness: str) -> str:
 
 
 def parse_api_bases(text: str) -> list[str]:
-    """``grep -v -e '^#' -e '^$'``, one entry per line."""
+    """The entries, one per line; empty lines and lines starting with '#' are skipped."""
     return [line for line in text.split("\n") if line != "" and not line.startswith("#")]
 
 
@@ -350,11 +350,7 @@ def decide(
     pr_shas: Callable[[str, str], tuple[str, str]] = lookup_pr_shas,
     permission: Callable[[str, str], str] = lookup_permission,
 ) -> list[tuple[str, str]]:
-    """The outputs of an allowed run, in order; raises Fail or Skip.
-
-    The checks run in a fixed order, which tests/test-authorize.sh pins, so
-    that the same input stops at the same check.
-    """
+    """The outputs of an allowed run, in order; raises Fail or Skip."""
     # This workflow's own commit, from which every trusted file is read.
     trusted_repo, trusted_sha, repo = env["TRUSTED_REPO"], env["TRUSTED_SHA"], env["REPO"]
     if not validate.matches(REPO, trusted_repo):
@@ -365,7 +361,6 @@ def decide(
         raise Fail(f"Invalid repository '{repo}'.")
     notice(f"Agent review workflow {trusted_repo}@{trusted_sha}; caller {repo}@{env['CALLER_WF_SHA']}.")
 
-    # Harness and key mode.
     harness = env["IN_HARNESS"]
     keyed = key_mode(harness)
     check_shared_key(env["HAS_SHARED_KEY"])

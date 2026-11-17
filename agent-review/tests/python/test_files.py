@@ -132,7 +132,7 @@ def test_reason_grew(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_unsafe_file_error_old_form() -> None:
-    """Raising it with a message only still works; 'reason' is then 'other'."""
+    """A message alone is enough; 'reason' is then 'other'."""
     e = files.UnsafeFileError("x: refused")
     assert (str(e), e.reason, e.st) == ("x: refused", "other", None)
     assert isinstance(e, OSError)

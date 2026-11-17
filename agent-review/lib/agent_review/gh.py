@@ -4,8 +4,8 @@ The only module that runs ``gh``, so the structure test can check that only
 ``authorize`` and ``publish-comment`` reach it (and with it the job token,
 which ``gh`` reads from ``GH_TOKEN``; it never passes through Python).
 ``gh`` rather than ``urllib``: the token stays out of this process, proxy
-variables are not honoured by accident, and the tests' fake ``gh`` on
-``PATH`` keeps working.
+variables are not honoured by accident, and the tests can put a fake
+``gh`` on ``PATH``.
 
 Keep the projections in ``gh --jq``: a PR object or a comment body is
 untrusted, so it is handled only by gh's JSON decoder and our code never
