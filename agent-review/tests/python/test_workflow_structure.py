@@ -654,6 +654,69 @@ def test_diag_breaks_legacy_commands(tmp_path: pathlib.Path) -> None:
     assert result.stderr == "t| a #\u200b#[warning]x\nt| ::error::y\nt| b #\u200b#[error]z\n".encode()
 
 
+# --- The started signal ------------------------------------------------------------
+
+
+def test_real_started_signal_passes() -> None:
+    assert ws.started_signal_problems(WORKFLOW) == []
+
+
+def test_started_step_must_be_first_and_unconditional() -> None:
+    for change in ("move", "if", "continue", "run"):
+        workflow = copy.deepcopy(WORKFLOW)
+        # The two jobs share their steps (YAML aliases): change one job's own copies.
+        steps = [dict(step) for step in workflow["jobs"]["review"]["steps"]]
+        workflow["jobs"]["review"]["steps"] = steps
+        if change == "move":
+            steps.insert(1, steps.pop(0))
+        elif change == "if":
+            steps[0]["if"] = "github.event_name == 'workflow_dispatch'"
+        elif change == "continue":
+            steps[0]["continue-on-error"] = True
+        else:
+            steps[0]["run"] = 'echo "started=false" >> "$GITHUB_OUTPUT"'
+        found = ws.started_signal_problems(workflow)
+        assert len(found) == 1 and found[0].startswith("review: the first step"), (change, found)
+
+
+def test_started_output_is_required_in_both_review_jobs() -> None:
+    for job_id in ws.REVIEW_JOBS:
+        workflow = copy.deepcopy(WORKFLOW)
+        workflow["jobs"][job_id]["outputs"] = {
+            k: v for k, v in workflow["jobs"][job_id]["outputs"].items() if k != "started"
+        }
+        assert ws.started_signal_problems(workflow) == [f"{job_id}: no output 'started' from the first step"]
+
+
+def report_step(workflow: dict[str, Any]) -> dict[str, Any]:
+    steps: list[dict[str, Any]] = workflow["jobs"]["publish"]["steps"]
+    (step,) = [s for s in steps if s.get("name") == ws.REPORT_STEP]
+    return step
+
+
+@pytest.mark.parametrize("key", sorted(ws.REPORT_ENV))
+def test_report_step_env_is_pinned(key: str) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    report_step(workflow)["env"][key] = "${{ needs.review.result }}"
+    found = ws.started_signal_problems(workflow)
+    assert len(found) == 1 and f"env {key} " in found[0], found
+
+
+@pytest.mark.parametrize("argument", ws.REPORT_ARGUMENTS)
+def test_report_step_passes_every_argument(argument: str) -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    step = report_step(workflow)
+    step["run"] = step["run"].replace(argument, "")
+    found = ws.started_signal_problems(workflow)
+    assert len(found) == 1 and argument in found[0], found
+
+
+def test_report_step_must_exist_once() -> None:
+    workflow = copy.deepcopy(WORKFLOW)
+    report_step(workflow)["name"] = "Report"
+    assert ws.started_signal_problems(workflow) == ["publish: 0 steps named 'Report a missing review'"]
+
+
 # --- The collect gate -------------------------------------------------------------
 
 GATE = "always() && steps.key.outputs.skipped != 'true' && steps.teardown.outcome == 'success'"

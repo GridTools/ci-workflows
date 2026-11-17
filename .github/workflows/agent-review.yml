@@ -361,6 +361,9 @@ jobs:
       outcome: ${{ steps.agent.outcome }}
       exit_code: ${{ steps.agent.outputs.exit_code }}
       skipped: ${{ steps.key.outputs.skipped }}
+      # Empty if GitHub ended the job before it got a runner (refused by the
+      # environment, or cancelled while queued): 'publish' then says so.
+      started: ${{ steps.started.outputs.started }}
     env: &review-env
       # The sandbox's working area. AWF mounts the workspace read-write, so
       # everything under it is untrusted once the sandbox has run.
@@ -372,6 +375,11 @@ jobs:
     # the host either (no 'services:', no daemon in a step): the sandbox
     # reaches every host port bound to 0.0.0.0 through AWF's network gateway.
     steps:
+      - &mark-started
+        name: Record that the job started
+        id: started
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
+
       - *fetch-trusted
 
       # Caller configuration: the validated inputs, and the addendum from the
@@ -702,6 +710,7 @@ jobs:
     outputs: *review-outputs
     env: *review-env
     steps:
+      - *mark-started
       - *fetch-trusted
       - *fetch-config
       - *prepare-inputs
@@ -822,23 +831,34 @@ jobs:
           { echo "result=posted"; echo "comment_url=${url}"; } >> "$GITHUB_OUTPUT"
 
       # A failed or rejected review is a warning, not a red run: the check is
-      # advisory.
+      # advisory. 'publish-comment explain' words the reason from the review
+      # job's result and outputs only (no token, nothing from the review): a
+      # keyed job that never got a runner (refused by the environment's
+      # protection rules, or cancelled while queued) has no sandbox logs to
+      # point at. At most one of the two review jobs ran.
       - name: Report a missing review
         if: steps.render.outputs.result == 'missing' || steps.render.outputs.result == 'invalid'
         env:
           RESULT: ${{ steps.render.outputs.result }}
+          KEYED: ${{ needs.authorize.outputs.keyed }}
+          REVIEW_RESULT: ${{ needs.authorize.outputs.keyed == 'true' && needs.review.result || needs.review-keyless.result }}
+          STARTED: ${{ needs.review.outputs.started || needs.review-keyless.outputs.started }}
+          ENVIRONMENT: ${{ inputs.environment }}
           FETCH_OUTCOME: ${{ needs.review.outputs.fetch_outcome || needs.review-keyless.outputs.fetch_outcome }}
           OUTCOME: ${{ needs.review.outputs.outcome || needs.review-keyless.outputs.outcome }}
           EXIT_CODE: ${{ needs.review.outputs.exit_code || needs.review-keyless.outputs.exit_code }}
+          PATH: /usr/bin:/bin
         run: |
-          case "${RESULT}" in
-            missing) reason="the agent produced no review (fetch outcome '${FETCH_OUTCOME}', review outcome '${OUTCOME}', exit code '${EXIT_CODE}')" ;;
-            invalid) reason="the review was rejected as invalid (not UTF-8, empty, or not a regular file within the size cap)" ;;
-          esac
-          echo "::warning title=Agent review failed::No review was posted: ${reason}. See the 'Fetch the pull request in the sandbox' and 'Run the review in the sandbox' logs."
+          text=$(/usr/bin/python3 -I -S -B "${RUNNER_TEMP}/trusted/bin/publish-comment" explain \
+            --result "${RESULT}" --keyed "${KEYED}" --review-result "${REVIEW_RESULT}" --started "${STARTED}" \
+            --environment "${ENVIRONMENT}" --fetch-outcome "${FETCH_OUTCOME}" --outcome "${OUTCOME}" \
+            --exit-code "${EXIT_CODE}")
+          { IFS= read -r reason; IFS= read -r where; } <<< "${text}"
+          echo "::warning title=Agent review failed::No review was posted: ${reason}. ${where}"
           {
             echo "### Agent review failed"
             echo
             echo "No review was posted: ${reason}; the run is green because the check is advisory."
-            echo "The cause is in the \`Fetch the pull request in the sandbox\` or \`Run the review in the sandbox\` log of the \`review\` job; see https://github.com/GridTools/ci-workflows/blob/main/docs/agent-review.md."
+            echo
+            echo "${where} See https://github.com/GridTools/ci-workflows/blob/main/docs/agent-review.md#troubleshooting."
           } >> "$GITHUB_STEP_SUMMARY"

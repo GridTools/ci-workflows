@@ -452,3 +452,88 @@ def test_projection_keeps_matching_exact(
         else "POST repos/example-org/example/issues/9/comments"
     )
     assert (directory / "requests.log").read_text() == want + "\n"
+
+
+# --- explain: why no review was posted -------------------------------------------------
+
+
+def explain(**overrides: object) -> tuple[str, str]:
+    args: dict[str, object] = {
+        "result": "missing",
+        "keyed": True,
+        "review_result": "failure",
+        "started": False,
+        "environment": "agent-review",
+        "fetch_outcome": "",
+        "outcome": "",
+        "exit_code": "",
+    }
+    return pc.explain(**{**args, **overrides})  # type: ignore[arg-type]
+
+
+def test_explain_environment_denial() -> None:
+    reason, where = explain()
+    assert "the keyed 'review' job did not run" in reason
+    assert "job result 'failure', no step ran" in reason
+    assert "environment 'agent-review' refused the job" in where
+    assert "Run the review in the sandbox" not in reason + where
+
+
+def test_explain_cancelled_before_start() -> None:
+    for keyed, job in ((True, "review"), (False, "review-keyless")):
+        reason, where = explain(keyed=keyed, review_result="cancelled")
+        assert f"the '{job}' job was cancelled before it started" in reason
+        assert "refused" not in where and "sandbox' logs" not in where
+
+
+def test_explain_keyless_job_without_runner_does_not_name_the_environment() -> None:
+    reason, where = explain(keyed=False)
+    assert "the 'review-keyless' job did not run" in reason
+    assert "environment" not in reason + where
+
+
+def test_explain_failure_before_the_sandbox() -> None:
+    reason, where = explain(started=True)
+    assert reason == "the 'review' job failed before the sandbox ran (job result 'failure')"
+    assert "See the failed step of the 'review' job" in where
+
+
+def test_explain_harness_failure_keeps_its_message() -> None:
+    reason, where = explain(
+        started=True, review_result="success", fetch_outcome="success", outcome="failure", exit_code="124"
+    )
+    assert reason == "the agent produced no review (fetch outcome 'success', review outcome 'failure', exit code '124')"
+    assert where == (
+        "See the 'Fetch the pull request in the sandbox' and 'Run the review in the sandbox' logs of the 'review' job."
+    )
+    # A fetch failure is a sandbox failure too.
+    assert "fetch outcome 'failure'" in explain(started=True, fetch_outcome="failure", outcome="skipped")[0]
+
+
+def test_explain_invalid_review() -> None:
+    reason, where = explain(result="invalid", started=True, fetch_outcome="success")
+    assert "rejected as invalid" in reason and "sandbox' logs" in where
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["explain", "--result", "posted", "--keyed", "true"],
+        ["explain", "--result", "missing", "--keyed", "yes"],
+        ["explain", "--result", "missing", "--keyed", "true", "--environment", "a\n::error::x"],
+        ["explain", "--result", "missing", "--keyed", "true", "--review-result", "a b"],
+        ["explain", "--result", "missing", "--keyed", "true", "--exit-code", "##[error]"],
+        ["explain", "--result", "missing", "--keyed", "true", "--unknown", "x"],
+    ],
+)
+def test_explain_rejects(argv: list[str]) -> None:
+    done = subprocess.run([*ENTRY, *argv], capture_output=True, check=False)
+    assert done.returncode == 1 and done.stdout == b""
+
+
+def test_explain_prints_two_lines() -> None:
+    argv = ["explain", "--result", "missing", "--keyed", "true", "--review-result", "failure", "--started", ""]
+    done = subprocess.run([*ENTRY, *argv, "--environment", "agent-review"], capture_output=True, check=True)
+    lines = done.stdout.decode().split("\n")
+    assert len(lines) == 3 and lines[2] == "" and all(lines[:2])
+    assert "::" not in done.stdout.decode() and "##[" not in done.stdout.decode()

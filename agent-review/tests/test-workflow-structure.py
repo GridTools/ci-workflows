@@ -27,6 +27,7 @@ from workflow_structure import (
     secret_refs,
     shebang_problems,
     shell_python_problems,
+    started_signal_problems,
     strings,
     token_reach_problems,
     tree_problems,
@@ -176,6 +177,10 @@ def main() -> int:
         "sandbox output: prefixed, no carriage return, no legacy '##[' (awf steps and diag)",
     )
     check_problems(collect_gate_problems(workflow), "'Collect the result' runs only after a successful teardown")
+    check_problems(
+        started_signal_problems(workflow),
+        "a review job that never started is reported as such: 'started' output, passed to 'explain'",
+    )
     check_problems(entry_problems(repo["entries"], repo["lib"]), "bin/: only the exact Python entry-point template")
     check_problems(tree_problems(repo["index"]), "tree: no symlink, .pth, .pyc, __pycache__, *customize.py")
     check_problems(shebang_problems(repo["first_lines"]), "no Python shebang outside lib/agent_review/ and tests/")
