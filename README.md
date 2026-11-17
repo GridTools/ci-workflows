@@ -2,7 +2,7 @@
 
 Reusable GitHub Actions workflows that any repository can call.
 
-**Status: first release, `v0.1.0`.** Both workflows ship together in it and are
+**Status: `v0.1.0`, the first release.** Both workflows ship together in it and are
 validated from a separate test caller; the agent review's [status
 note](docs/agent-review.md) and PR Agent's [status note](docs/pr-agent.md) list
 what is not verified yet. Read each release's notes for breaking changes
@@ -32,7 +32,7 @@ jobs:
 Never call a branch (`@main`) or a moving tag: a change here would reach your
 repository unreviewed. Check every new pin, including Dependabot's, before
 merging it: a commit that exists only in a fork resolves through this
-repository's name in the REST API (Actions refused it as a pin in testing, but
+repository's name in the REST API (Actions refused it as a pin in one test (from a fork with Actions disabled), but
 that may change), and a tag can resolve to another commit even between
 attempts of one run.
 
