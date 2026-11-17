@@ -473,23 +473,32 @@ def explain(**overrides: object) -> tuple[str, str]:
 
 def test_explain_environment_denial() -> None:
     reason, where = explain()
-    assert "the keyed 'review' job did not run" in reason
-    assert "job result 'failure', no step ran" in reason
+    assert reason == (
+        "the 'review' job reported no step: it never got a runner, or its runner was lost (job result 'failure')"
+    )
     assert "environment 'agent-review' refused the job" in where
+    # Only conditionally: an empty 'started' does not prove that no step ran.
+    assert "If the environment refused it, no sandbox ran and the inference key was not used." in where
     assert "Run the review in the sandbox" not in reason + where
 
 
 def test_explain_cancelled_before_start() -> None:
-    for keyed, job in ((True, "review"), (False, "review-keyless")):
-        reason, where = explain(keyed=keyed, review_result="cancelled")
-        assert f"the '{job}' job was cancelled before it started" in reason
-        assert "refused" not in where and "sandbox' logs" not in where
+    reason, where = explain(review_result="cancelled")
+    assert reason == "the 'review' job was cancelled before it reported a step (job result 'cancelled')"
+    assert "replaced it in the keyed job's queue" in where
+    # The keyless job has no concurrency group: no queue to be replaced in.
+    reason, where = explain(keyed=False, review_result="cancelled")
+    assert "the 'review-keyless' job was cancelled before it reported a step" in reason
+    assert where == "The run was cancelled. See the 'review-keyless' job."
+    for keyed in (True, False):
+        text = " ".join(explain(keyed=keyed, review_result="cancelled"))
+        assert "refused" not in text and "sandbox' logs" not in text
 
 
 def test_explain_keyless_job_without_runner_does_not_name_the_environment() -> None:
     reason, where = explain(keyed=False)
-    assert "the 'review-keyless' job did not run" in reason
-    assert "environment" not in reason + where
+    assert "the 'review-keyless' job reported no step" in reason
+    assert "environment" not in reason + where and "inference key" not in where
 
 
 def test_explain_failure_before_the_sandbox() -> None:
@@ -498,6 +507,12 @@ def test_explain_failure_before_the_sandbox() -> None:
         reason, where = explain(started=True, fetch_outcome=fetch_outcome, outcome=outcome)
         assert reason == "the 'review' job failed before the sandbox ran (job result 'failure')"
         assert "See the failed step of the 'review' job" in where
+
+
+def test_explain_cancelled_before_the_sandbox() -> None:
+    reason, where = explain(started=True, review_result="cancelled", fetch_outcome="skipped", outcome="skipped")
+    assert reason == "the 'review' job was cancelled before the sandbox ran (job result 'cancelled')"
+    assert "failed" not in reason + where
 
 
 def test_explain_harness_failure_keeps_its_message() -> None:

@@ -2,8 +2,11 @@
 # The adapters' request timeouts against an inference service that stalls
 # (fake_inference.py): a request that stalls must end and be retried, a
 # slow but live stream must not be cut, and a run must still get through
-# what the v0.1.0 release validation saw: a request answered only after
-# 185 s, and a service that answers nothing for 13 minutes.
+# long waits: a request answered only after 185 s (as in the v0.1.0 release
+# validation), the same wait between the headers and the first event of a
+# stream, and a service that answers nothing for 17 minutes (13 in the
+# validation; more than Pi's default of 3 retries can sit out, so the case
+# fails if its raised retry count is lost).
 #
 # Usage: test-harness-stall.sh [--fast] [opencode] [pi]
 #
@@ -14,8 +17,8 @@
 # curl and python3.
 #
 # By default the adapters run unchanged and the cases take the real times
-# (about 14 minutes; the cases run in parallel). --fast runs copies of the
-# adapters with every timeout divided by 30 (about 1 minute): it checks the
+# (about 18 minutes; the cases run in parallel). --fast runs copies of the
+# adapters with every timeout and retry delay divided by 30 (about 1 minute): it checks the
 # behaviour, not the values.
 
 set -uo pipefail
@@ -50,7 +53,7 @@ ADAPTERS=${HARNESSES_DIR}
 if [ "${SCALE}" -ne 1 ]; then
   ADAPTERS="${WORK}/harnesses"
   cp -R "${HARNESSES_DIR}" "${ADAPTERS}"
-  for name in HEADER_TIMEOUT_MS CHUNK_TIMEOUT_MS IDLE_TIMEOUT_MS; do
+  for name in HEADER_TIMEOUT_MS CHUNK_TIMEOUT_MS IDLE_TIMEOUT_MS RETRY_BASE_DELAY_MS; do
     for file in "${ADAPTERS}"/*/run.sh; do
       value=$(sed -n -E "s/^readonly (.* )?${name}=([0-9]+)( .*)?\$/\\2/p" "${file}" | head -n 1)
       [ -z "${value}" ] || sed -i -E "s/^(readonly (.* )?${name}=)${value}/\\1$((value / SCALE))/" "${file}"
@@ -58,16 +61,18 @@ if [ "${SCALE}" -ne 1 ]; then
   done
 fi
 
-# Seconds: how long each harness waits for headers and between chunks, and
-# the silence a run must survive (788 s in the release validation).
+# Seconds: how long each harness waits for headers and between chunks; the
+# wait of the validation's slow answer; and a silence longer than 4
+# attempts of Pi's timeout (3 retries, Pi's default) but shorter than what
+# either harness must sit out.
 OPENCODE_HEADER=$(($(constant opencode HEADER_TIMEOUT_MS) / 1000))
 OPENCODE_CHUNK=$(($(constant opencode CHUNK_TIMEOUT_MS) / 1000))
 PI_IDLE=$(($(constant pi IDLE_TIMEOUT_MS) / 1000))
-SILENCE=$((788 / SCALE))
+SILENCE=$((1050 / SCALE))
 SLOW_ANSWER=$((185 / SCALE))
 echo "opencode: headers ${OPENCODE_HEADER} s, chunks ${OPENCODE_CHUNK} s; pi: idle ${PI_IDLE} s; silence ${SILENCE} s"
 
-PORT=18200
+PORT=${STALL_TEST_PORT:-18200}
 # Starts one case in the background: a server with the given options and
 # the adapter against it. Results go to ${WORK}/<case>/.
 start_case() { # case harness server-options...
@@ -122,11 +127,12 @@ for harness in "${SELECTED[@]}"; do
   # one, so two requests must stall for the review's own request to.
   start_case "${harness}-headers" "${harness}" --stall-headers 2
   start_case "${harness}-stream" "${harness}" --stall-midstream 2
-  start_case "${harness}-slow" "${harness}" --stream-gap "$((270 / SCALE / 9 + 1))" --stream-chunks 9
+  start_case "${harness}-slow" "${harness}" --stream-gap "$((330 / SCALE / 9 + 1))" --stream-chunks 9
   start_case "${harness}-late" "${harness}" --min-wait "${SLOW_ANSWER}"
+  start_case "${harness}-first" "${harness}" --first-event-delay "${SLOW_ANSWER}"
   start_case "${harness}-silence" "${harness}" --ready-at "${SILENCE}"
 done
-echo "Running $((5 * ${#SELECTED[@]})) cases ..."
+echo "Running $((6 * ${#SELECTED[@]})) cases ..."
 wait
 
 for harness in "${SELECTED[@]}"; do
@@ -139,6 +145,8 @@ for harness in "${SELECTED[@]}"; do
     eval "succeeded ${harness}-slow && [ \"\$(events ${harness}-slow client-abort)\" -eq 0 ] && elapsed_between ${harness}-slow $((chunk + 1)) 100000"
   check_case "${harness}: a request answered only after ${SLOW_ANSWER} s succeeds at the first attempt" \
     eval "succeeded ${harness}-late && [ \"\$(events ${harness}-late client-abort)\" -eq 0 ]"
+  check_case "${harness}: a stream whose first event comes ${SLOW_ANSWER} s after its headers is not cut" \
+    eval "succeeded ${harness}-first && [ \"\$(events ${harness}-first client-abort)\" -eq 0 ]"
   check_case "${harness}: a run sits out ${SILENCE} s of silence and then succeeds" \
     eval "succeeded ${harness}-silence && elapsed_between ${harness}-silence ${SILENCE} $((SILENCE + header + 20))"
 done

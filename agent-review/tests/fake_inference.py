@@ -3,8 +3,8 @@
 Usage::
 
     fake_inference.py --port P --log FILE [--stall-headers N] [--stall-midstream N]
-                      [--ready-at SECONDS] [--min-wait SECONDS] [--stream-gap SECONDS]
-                      [--stream-chunks N]
+                      [--ready-at SECONDS] [--min-wait SECONDS] [--first-event-delay SECONDS]
+                      [--stream-gap SECONDS] [--stream-chunks N]
 
 Answers every ``POST`` with a short final answer in the OpenAI chat format
 (streamed if the request asks for it), and never asks for a tool call. The
@@ -16,6 +16,9 @@ options make it misbehave the way the real service was seen to:
   one arrived; a request waiting at that moment is answered then;
 - ``--min-wait S``: every request is answered only once it has waited S
   seconds, so giving up earlier and asking again never helps;
+- ``--first-event-delay S``: a streamed response's headers are sent at
+  once, its first event S seconds later (a service that accepts a request
+  and then queues it, or a model that thinks before its first token);
 - ``--stream-gap``, ``--stream-chunks``: a slow stream that stays alive.
 
 A stalled request is held until the client closes the connection. ``FILE``
@@ -153,6 +156,8 @@ class Handler(BaseHTTPRequestHandler):
             return {**base, "choices": [{"index": 0, "delta": content, "finish_reason": finish}]}
 
         try:
+            if options.first_event_delay and hold(time.monotonic() + options.first_event_delay):
+                return
             event(delta({"role": "assistant", "content": ""}))
             if number <= options.stall_headers + options.stall_midstream:
                 state.log(i=number, ev="stalled", t=seconds(), where="stream")
@@ -180,6 +185,7 @@ def main() -> None:
     parser.add_argument("--stall-midstream", type=int, default=0)
     parser.add_argument("--ready-at", type=float, default=0)
     parser.add_argument("--min-wait", type=float, default=0)
+    parser.add_argument("--first-event-delay", type=float, default=0)
     parser.add_argument("--stream-gap", type=float, default=0.05)
     parser.add_argument("--stream-chunks", type=int, default=len(ANSWER))
     Handler.state = State(parser.parse_args())

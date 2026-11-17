@@ -34,8 +34,8 @@ does):
 - the started signal (started_signal_problems): the first step of both
   review jobs sets the 'started' output unconditionally, and 'Report a
   missing review' passes it, the review job's result and the 'keyed' flag
-  to 'publish-comment explain', so a job that GitHub ended before it got
-  a runner (refused by the environment, cancelled while queued) is not
+  to 'publish-comment explain', so a job that reported no step (refused
+  by the environment, cancelled while queued, its runner lost) is not
   reported as a failure inside the sandbox.
 
 Python (invariant 13, docs/adr/0004-python-runtime.md):

@@ -44,8 +44,9 @@ To upgrade, set the version in `package.json` and regenerate the lockfile with
   further chunk of a streamed response, for that long is ended and retried;
   a stream that keeps sending is never cut. It is not lower because, in the
   v0.1.0 release validation, a request was answered after 185 s without
-  headers. `retry.maxRetries` is 5 (default 3; the delay doubles from 2 s,
-  and the count starts again after a successful request): 6 attempts of
+  headers. `retry.maxRetries` is 5 (default 3; the delay doubles from
+  `retry.baseDelayMs`, 2 s as by default, and the count starts again after
+  a successful request): 6 attempts of
   240 s exceed the harness timeout, so a run waits for a silent service as
   long as it did with the defaults (4 x 300 s). Every attempt counts
   against AWF's request limits. `../../tests/test-harness-stall.sh` checks

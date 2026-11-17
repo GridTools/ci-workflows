@@ -361,8 +361,9 @@ jobs:
       outcome: ${{ steps.agent.outcome }}
       exit_code: ${{ steps.agent.outputs.exit_code }}
       skipped: ${{ steps.key.outputs.skipped }}
-      # Empty if GitHub ended the job before it got a runner (refused by the
-      # environment, or cancelled while queued): 'publish' then says so.
+      # Empty if the job reported no step: GitHub ended it before it got a
+      # runner (refused by the environment, or cancelled while queued), or
+      # the runner was lost. 'publish' then says so.
       started: ${{ steps.started.outputs.started }}
     env: &review-env
       # The sandbox's working area. AWF mounts the workspace read-write, so
@@ -833,9 +834,9 @@ jobs:
       # A failed or rejected review is a warning, not a red run: the check is
       # advisory. 'publish-comment explain' words the reason from the review
       # job's result and outputs only (no token, nothing from the review): a
-      # keyed job that never got a runner (refused by the environment's
-      # protection rules, or cancelled while queued) has no sandbox logs to
-      # point at. At most one of the two review jobs ran.
+      # job that reported no step (refused by the environment's protection
+      # rules, cancelled while queued, or its runner lost) has no sandbox
+      # logs to point at. At most one of the two review jobs ran.
       - name: Report a missing review
         if: steps.render.outputs.result == 'missing' || steps.render.outputs.result == 'invalid'
         env:

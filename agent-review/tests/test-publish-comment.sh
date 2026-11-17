@@ -198,16 +198,16 @@ test_explain_environment_denial() {
   out=$(explain --result missing --keyed true --review-result failure --started "" --environment agent-review \
     --fetch-outcome "" --outcome "" --exit-code "") &&
     assert "two lines" test "$(wc -l <<<"${out}")" -eq 2 &&
-    assert "says the keyed job did not run" grep -qF "the keyed 'review' job did not run" <<<"${out}" &&
+    assert "says the job reported no step" grep -qF "the 'review' job reported no step: it never got a runner, or its runner was lost" <<<"${out}" &&
     assert "names the environment" grep -qF "environment 'agent-review' refused the job" <<<"${out}" &&
-    assert "says the key was not used" grep -qF "the inference key was not used" <<<"${out}" &&
+    assert "the key claim is conditional" grep -qF "If the environment refused it, no sandbox ran and the inference key was not used" <<<"${out}" &&
     assert "no pointer to sandbox logs" lacks "Run the review in the sandbox" "${out}"
 }
 
 test_explain_cancelled_while_queued() {
   local out
   out=$(explain --result missing --keyed true --review-result cancelled --started "" --environment agent-review) &&
-    assert "says cancelled" grep -qF "was cancelled before it started" <<<"${out}" &&
+    assert "says cancelled" grep -qF "was cancelled before it reported a step" <<<"${out}" &&
     assert "does not blame the environment" lacks "refused the job" "${out}" &&
     assert "no pointer to sandbox logs" lacks "Run the review in the sandbox" "${out}"
 }

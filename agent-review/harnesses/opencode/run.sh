@@ -16,18 +16,22 @@ adapter_init opencode
 # at the last step tools are disabled and the model has to answer.
 readonly MAX_STEPS=35
 
-# Request timeouts, in milliseconds, for the two ways a request can stall.
-# opencode retries a timed-out request, but at most 3 times per run, and
-# that count cannot be configured: the time a run can wait for a service
-# that answers nothing is 4 x the header timeout. So the header timeout
-# stays at opencode's default, set here so that an upgrade cannot change it
-# unnoticed: a lower value would end runs that succeed today after a long
-# wait (in the v0.1.0 release validation, 13 minutes without an answer,
-# and a request answered after 185 s without headers). The time between two chunks of a streamed response is another
-# matter: opencode's default is 900 s, so one stream that stops ends the
-# run at the harness time limit. A live stream sends a chunk every few
-# seconds; its total duration is not limited.
-readonly HEADER_TIMEOUT_MS=300000 CHUNK_TIMEOUT_MS=120000
+# Request timeouts, in milliseconds. opencode retries a timed-out request,
+# but at most 3 times per run, and that count cannot be configured: the
+# time a run can wait for a service that answers nothing is 4 x the
+# timeout. So the wait for response headers stays at opencode's default,
+# set here so that an upgrade cannot change it unnoticed: a lower value
+# would end runs that succeed today after a long wait (in the v0.1.0
+# release validation, 13 minutes without an answer, and a request answered
+# after 185 s without headers). The chunk timeout is the wait for the next
+# event of a streamed response, and also for the FIRST one after the
+# headers: a service that sends headers at once and then queues the
+# request, or a model that thinks for a while before its first token, is
+# silent there just as long. So it gets the same value as the header wait,
+# not less; opencode's default is 900 s, with which one stream that stops
+# uses most of the harness time limit. A stream that keeps sending is never
+# cut, however long it takes.
+readonly HEADER_TIMEOUT_MS=300000 CHUNK_TIMEOUT_MS=300000
 
 bin="${HARNESS_PREFIX}/node_modules/@opencode/cli-linux-x64-baseline/bin/opencode"
 

@@ -16,9 +16,10 @@ workflow runs ``render`` in a step without a token. Only ``post`` runs
 only its arguments, which the workflow takes from ``needs.*`` (job results
 and step outputs) and the ``environment`` input, never from the review: it
 prints two lines for the "no review" warning, why there is no review and
-where to look. It tells a review job that never started (refused by the
-environment's protection rules, or cancelled while queued) and one that
-failed before the sandbox ran from a failure inside the sandbox.
+where to look. It tells a review job that reported no step (refused by the
+environment's protection rules, cancelled while queued, or its runner
+lost) and one that ended before the sandbox ran from a failure inside the
+sandbox.
 
 Exit codes: 0 on success; 3 if the review is not valid UTF-8, is empty, or
 its file is not a regular file (a symlink, a FIFO, ...) within the size cap
@@ -302,8 +303,9 @@ def explain(
 ) -> tuple[str, str]:
     """Why no review was posted, and where to look: two single-line texts.
 
-    ``started`` is the review job's own first output, so its absence means
-    that no step ran: GitHub ended the job before it got a runner.
+    ``started`` is the review job's own first output. Its absence means
+    that the job reported no step: usually GitHub ended it before it got a
+    runner, but a runner lost during the job reports nothing either.
     """
     job = "review" if keyed else "review-keyless"
     if result == "invalid":
@@ -311,33 +313,44 @@ def explain(
             "the review was rejected as invalid (not UTF-8, empty, or not a regular file within the size cap)",
             f"{SANDBOX_LOGS} of the '{job}' job.",
         )
+    cancelled = review_result == "cancelled"
     if not started:
-        no_logs = "No sandbox ran, so there are no sandbox logs."
-        if review_result == "cancelled":
-            return (
-                f"the '{job}' job was cancelled before it started (job result 'cancelled', no step ran)",
-                "A newer review request for the same pull request replaced it in the queue, or the run was"
-                f" cancelled. {no_logs}",
+        # No step reported: GitHub never gave the job a runner, or the
+        # runner was lost (out of memory, disk full, shut down) before the
+        # job's outputs were sent. The two cannot be told apart from here.
+        if cancelled:
+            cause = (
+                "A newer review request for the same pull request replaced it in the keyed job's queue, or the run"
+                " was cancelled."
+                if keyed
+                else "The run was cancelled."
             )
+            return (
+                f"the '{job}' job was cancelled before it reported a step (job result 'cancelled')",
+                f"{cause} See the '{job}' job.",
+            )
+        reason = (
+            f"the '{job}' job reported no step: it never got a runner, or its runner was lost (job result"
+            f" '{review_result}')"
+        )
         if keyed:
             return (
-                f"the keyed 'review' job did not run: it ended before it got a runner (job result"
-                f" '{review_result}', no step ran), so the inference key was not used",
+                reason,
                 f"The usual cause is that the environment '{environment}' refused the job: its deployment branch"
                 " rule (a keyed review runs only from the default branch), a required reviewer, or another"
                 " protection rule. See the annotation on the 'review' job and the environment's settings"
-                f" (Settings > Environments). {no_logs}",
+                " (Settings > Environments). If the environment refused it, no sandbox ran and the inference key"
+                " was not used.",
             )
-        return (
-            f"the '{job}' job did not run: it ended before it got a runner (job result '{review_result}', no step ran)",
-            f"See the annotation on the '{job}' job. {no_logs}",
-        )
+        return (reason, f"See the annotation on the '{job}' job.")
     # A step after a failed one is 'skipped'; the output is empty if the job
     # ended in its first steps.
     if fetch_outcome in ("", "skipped"):
+        how = "was cancelled" if cancelled else "failed"
         return (
-            f"the '{job}' job failed before the sandbox ran (job result '{review_result}')",
-            f"See the failed step of the '{job}' job. No sandbox ran, so there are no sandbox logs.",
+            f"the '{job}' job {how} before the sandbox ran (job result '{review_result}')",
+            f"See the {'log' if cancelled else 'failed step'} of the '{job}' job. No sandbox ran, so there are no"
+            " sandbox logs.",
         )
     return (
         f"the agent produced no review (fetch outcome '{fetch_outcome}', review outcome '{outcome}',"
