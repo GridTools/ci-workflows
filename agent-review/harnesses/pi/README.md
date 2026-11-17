@@ -39,16 +39,18 @@ To upgrade, set the version in `package.json` and regenerate the lockfile with
   bound is AWF's request rate limits and the harness timeout (see
   `../../awf.yaml`).
 - **Request timeouts and retries** come from `settings.json` in the same
-  directory: `httpIdleTimeoutMs` 120 s (Pi's default is 300 s) ends a
-  request that gets no response headers, or no further chunk of a streamed
-  response, for that long; a stream that keeps sending is never cut.
-  `retry.maxRetries` is 9 (default 3), with delays doubling from 2 s up to
-  10 s, and the count starts again after a successful request. Ten attempts
-  of 120 s exceed the harness timeout, so a run waits for a silent service
-  as long as it did with the defaults (4 x 300 s), and resumes sooner once
-  the service answers. Every attempt counts against AWF's request limits.
-  `../../tests/test-harness-stall.sh` checks this against a server that
-  stalls; run it after changing these values or the pinned version.
+  directory. `httpIdleTimeoutMs` is 240 s (Pi's default is 300 s; one
+  setting for both waits): a request that gets no response headers, or no
+  further chunk of a streamed response, for that long is ended and retried;
+  a stream that keeps sending is never cut. It is not lower because, in the
+  v0.1.0 release validation, a request was answered after 185 s without
+  headers. `retry.maxRetries` is 5 (default 3; the delay doubles from 2 s,
+  and the count starts again after a successful request): 6 attempts of
+  240 s exceed the harness timeout, so a run waits for a silent service as
+  long as it did with the defaults (4 x 300 s). Every attempt counts
+  against AWF's request limits. `../../tests/test-harness-stall.sh` checks
+  this against a server that stalls; run it after changing these values or
+  the pinned version.
 
 ## Outbound calls
 

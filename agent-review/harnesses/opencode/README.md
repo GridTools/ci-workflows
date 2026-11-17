@@ -44,8 +44,9 @@ release still has the flags and environment variables used in `run.sh`.
   8 s, but at most 3 times per run, and that limit cannot be configured: a
   run waits at most 4 x `headerTimeout` for a service that answers nothing.
   That is why the header timeout is not lower: in the v0.1.0 release
-  validation, reviews succeeded after 13 minutes without an answer, which a
-  shorter wait would have ended. `../../tests/test-harness-stall.sh` checks
+  validation, a review succeeded after 13 minutes without an answer, and
+  one request was answered after 185 s without headers; a shorter wait
+  could have ended both. `../../tests/test-harness-stall.sh` checks
   this against a server that stalls; run it after changing these values or
   the pinned version, since the retry limit may change with it.
 

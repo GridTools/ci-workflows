@@ -22,7 +22,8 @@ readonly MAX_STEPS=35
 # that answers nothing is 4 x the header timeout. So the header timeout
 # stays at opencode's default, set here so that an upgrade cannot change it
 # unnoticed: a lower value would end runs that succeed today after a long
-# wait. The time between two chunks of a streamed response is another
+# wait (in the v0.1.0 release validation, 13 minutes without an answer,
+# and a request answered after 185 s without headers). The time between two chunks of a streamed response is another
 # matter: opencode's default is 900 s, so one stream that stops ends the
 # run at the harness time limit. A live stream sends a chunk every few
 # seconds; its total duration is not limited.

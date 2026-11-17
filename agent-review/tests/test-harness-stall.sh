@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The adapters' request timeouts against an inference service that stalls
 # (fake_inference.py): a request that stalls must end and be retried, a
-# slow but live stream must not be cut, and a run must still sit out a
-# service that answers nothing for 13 minutes, as seen in the v0.1.0
-# release validation.
+# slow but live stream must not be cut, and a run must still get through
+# what the v0.1.0 release validation saw: a request answered only after
+# 185 s, and a service that answers nothing for 13 minutes.
 #
 # Usage: test-harness-stall.sh [--fast] [opencode] [pi]
 #
@@ -50,7 +50,7 @@ ADAPTERS=${HARNESSES_DIR}
 if [ "${SCALE}" -ne 1 ]; then
   ADAPTERS="${WORK}/harnesses"
   cp -R "${HARNESSES_DIR}" "${ADAPTERS}"
-  for name in HEADER_TIMEOUT_MS CHUNK_TIMEOUT_MS IDLE_TIMEOUT_MS RETRY_BASE_DELAY_MS RETRY_MAX_DELAY_MS; do
+  for name in HEADER_TIMEOUT_MS CHUNK_TIMEOUT_MS IDLE_TIMEOUT_MS; do
     for file in "${ADAPTERS}"/*/run.sh; do
       value=$(sed -n -E "s/^readonly (.* )?${name}=([0-9]+)( .*)?\$/\\2/p" "${file}" | head -n 1)
       [ -z "${value}" ] || sed -i -E "s/^(readonly (.* )?${name}=)${value}/\\1$((value / SCALE))/" "${file}"
@@ -64,6 +64,7 @@ OPENCODE_HEADER=$(($(constant opencode HEADER_TIMEOUT_MS) / 1000))
 OPENCODE_CHUNK=$(($(constant opencode CHUNK_TIMEOUT_MS) / 1000))
 PI_IDLE=$(($(constant pi IDLE_TIMEOUT_MS) / 1000))
 SILENCE=$((788 / SCALE))
+SLOW_ANSWER=$((185 / SCALE))
 echo "opencode: headers ${OPENCODE_HEADER} s, chunks ${OPENCODE_CHUNK} s; pi: idle ${PI_IDLE} s; silence ${SILENCE} s"
 
 PORT=18200
@@ -121,10 +122,11 @@ for harness in "${SELECTED[@]}"; do
   # one, so two requests must stall for the review's own request to.
   start_case "${harness}-headers" "${harness}" --stall-headers 2
   start_case "${harness}-stream" "${harness}" --stall-midstream 2
-  start_case "${harness}-slow" "${harness}" --stream-gap "$((180 / SCALE / 9 + 1))" --stream-chunks 9
+  start_case "${harness}-slow" "${harness}" --stream-gap "$((270 / SCALE / 9 + 1))" --stream-chunks 9
+  start_case "${harness}-late" "${harness}" --min-wait "${SLOW_ANSWER}"
   start_case "${harness}-silence" "${harness}" --ready-at "${SILENCE}"
 done
-echo "Running $((4 * ${#SELECTED[@]})) cases ..."
+echo "Running $((5 * ${#SELECTED[@]})) cases ..."
 wait
 
 for harness in "${SELECTED[@]}"; do
@@ -135,6 +137,8 @@ for harness in "${SELECTED[@]}"; do
     eval "succeeded ${harness}-stream && [ \"\$(longest_wait ${harness}-stream)\" -ge $((chunk - 1)) ] && [ \"\$(longest_wait ${harness}-stream)\" -le $((chunk + 5)) ]"
   check_case "${harness}: a slow stream longer than the chunk timeout is not cut" \
     eval "succeeded ${harness}-slow && [ \"\$(events ${harness}-slow client-abort)\" -eq 0 ] && elapsed_between ${harness}-slow $((chunk + 1)) 100000"
+  check_case "${harness}: a request answered only after ${SLOW_ANSWER} s succeeds at the first attempt" \
+    eval "succeeded ${harness}-late && [ \"\$(events ${harness}-late client-abort)\" -eq 0 ]"
   check_case "${harness}: a run sits out ${SILENCE} s of silence and then succeeds" \
     eval "succeeded ${harness}-silence && elapsed_between ${harness}-silence ${SILENCE} $((SILENCE + header + 20))"
 done

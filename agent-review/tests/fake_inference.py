@@ -3,7 +3,8 @@
 Usage::
 
     fake_inference.py --port P --log FILE [--stall-headers N] [--stall-midstream N]
-                      [--ready-at SECONDS] [--stream-gap SECONDS] [--stream-chunks N]
+                      [--ready-at SECONDS] [--min-wait SECONDS] [--stream-gap SECONDS]
+                      [--stream-chunks N]
 
 Answers every ``POST`` with a short final answer in the OpenAI chat format
 (streamed if the request asks for it), and never asks for a tool call. The
@@ -13,6 +14,8 @@ options make it misbehave the way the real service was seen to:
 - ``--stall-midstream N``: the next N get headers and one chunk, then nothing;
 - ``--ready-at S``: no request is answered before S seconds after the first
   one arrived; a request waiting at that moment is answered then;
+- ``--min-wait S``: every request is answered only once it has waited S
+  seconds, so giving up earlier and asking again never helps;
 - ``--stream-gap``, ``--stream-chunks``: a slow stream that stays alive.
 
 A stalled request is held until the client closes the connection. ``FILE``
@@ -113,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
             state.log(i=number, ev="stalled", t=seconds(), where="headers")
             hold(None)
             return
-        if hold(first + options.ready_at):
+        if hold(max(first + options.ready_at, arrived + options.min_wait)):
             return
         state.log(i=number, ev="headers", t=seconds(), waited=round(time.monotonic() - arrived, 1))
         words = [*ANSWER, *(["more. "] * max(0, options.stream_chunks - len(ANSWER)))]
@@ -176,6 +179,7 @@ def main() -> None:
     parser.add_argument("--stall-headers", type=int, default=0)
     parser.add_argument("--stall-midstream", type=int, default=0)
     parser.add_argument("--ready-at", type=float, default=0)
+    parser.add_argument("--min-wait", type=float, default=0)
     parser.add_argument("--stream-gap", type=float, default=0.05)
     parser.add_argument("--stream-chunks", type=int, default=len(ANSWER))
     Handler.state = State(parser.parse_args())

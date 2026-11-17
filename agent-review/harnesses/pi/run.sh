@@ -23,13 +23,15 @@ readonly CONTEXT_WINDOW=128000 MAX_TOKENS=16384
 
 # A request that sends nothing for this long (no response headers, or no
 # further chunk of a streamed response) is ended and retried; Pi's default
-# is 300 s. A live stream sends a chunk every few seconds; its total
-# duration is not limited. The retries (Pi's default is 3, with a delay
-# doubling from 2 s) are raised so that the time a run can wait for a
-# service that answers nothing is not shortened: 10 attempts of 120 s plus
-# the delays exceed the harness time limit, which stays the bound. Each
-# attempt counts against AWF's request limits.
-readonly IDLE_TIMEOUT_MS=120000 MAX_RETRIES=9 RETRY_BASE_DELAY_MS=2000 RETRY_MAX_DELAY_MS=10000
+# is 300 s, and it has one setting for both waits. A live stream sends a
+# chunk every few seconds; its total duration is not limited. Not lower: in
+# the v0.1.0 release validation a request was answered after 185 s without
+# headers, and whether a new request would have been answered sooner is not
+# known. The retries (Pi's default is 3; the delay doubles from 2 s) are
+# raised so that the time a run can wait for a service that answers nothing
+# is not shortened: 6 attempts of 240 s exceed the harness time limit, which
+# stays the bound. Each attempt counts against AWF's request limits.
+readonly IDLE_TIMEOUT_MS=240000 MAX_RETRIES=5
 
 export PI_CODING_AGENT_DIR="${SCRATCH}/agent" PI_OFFLINE=1 PI_TELEMETRY=0
 mkdir -p "${PI_CODING_AGENT_DIR}"
@@ -44,9 +46,7 @@ jq -n --arg id "${MODEL}" --arg base "${AWF_API_PROXY_OPENAI_URL%/}/v1" \
     models: [{id: $id, name: $id, reasoning: false, input: ["text"], contextWindow: $ctx, maxTokens: $max}]}}}' \
   >"${PI_CODING_AGENT_DIR}/models.json"
 jq -n --argjson idle "${IDLE_TIMEOUT_MS}" --argjson retries "${MAX_RETRIES}" \
-  --argjson base "${RETRY_BASE_DELAY_MS}" --argjson max "${RETRY_MAX_DELAY_MS}" '
-  {httpIdleTimeoutMs: $idle, retry: {enabled: true, maxRetries: $retries, baseDelayMs: $base, maxAgentDelayMs: $max}}' \
-  >"${PI_CODING_AGENT_DIR}/settings.json"
+  '{httpIdleTimeoutMs: $idle, retry: {enabled: true, maxRetries: $retries}}' >"${PI_CODING_AGENT_DIR}/settings.json"
 
 cd "${REPO_DIR}" || exit 1
 # --no-approve ignores the repository's .pi/ (extensions there are executed,
