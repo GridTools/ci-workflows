@@ -32,9 +32,9 @@ jobs:
 Never call a branch (`@main`) or a moving tag: a change here would reach your
 repository unreviewed. Check every new pin, including Dependabot's, before
 merging it: a commit that exists only in a fork resolves through this
-repository's name in the REST API (Actions refused it as a pin in one test (from a fork with Actions disabled), but
-that may change), and a tag can resolve to another commit even between
-attempts of one run.
+repository's name in the REST API (in one test, from a fork with Actions
+disabled, Actions refused it as a pin, but that may change), and a tag can
+resolve to another commit even between attempts of one run.
 
 ```bash
 gh api repos/GridTools/ci-workflows/compare/main...<sha> --jq .status  # 'identical' or 'behind'

@@ -5,7 +5,7 @@ The reusable `PR Agent` workflow ([`.github/workflows/pr-agent.yml`](../.github/
 An adopting repository adds a small **caller workflow** that calls this one pinned by commit SHA, and keeps its own triggers, environment, key, event policy, `.pr_agent.toml` and review rules. The design is in [ADR 0003](adr/0003-pr-agent-reusable-workflow.md).
 
 > [!NOTE]
-> **Status: `v0.1.0`, the first release.** The workflow has run through this repository's self-test (a local call in dry run, which never starts the keyed job) and from a separate test caller with a real key: a posted review, `pull_request_target` and `issue_comment` runs (`/review`), and refusals for a non-writer's PR, a non-writer's comment and a `--` argument. The caller tests recorded in the PR that added it (caller test mode, with a real key) covered a refused environment, a missing and a wrong key, forced timeouts, and the failure comment's update and removal. It ships in `v0.1.0` together with the agent review; see the [release checklist](#release-checklist).
+> **Status: `v0.1.0`, the first release.** The workflow has run through this repository's self-test (a local call in dry run, which never starts the keyed job) and from a separate test caller with a real key: a posted review, `pull_request_target` and `issue_comment` runs (`/review`), and refusals for a non-writer's PR, a non-writer's comment and a `--` argument. Caller tests with a real key ([caller test mode](#caller-test-mode)) covered a refused environment, a missing and a wrong key, forced timeouts, and the failure comment's update and removal. See the [release checklist](#release-checklist).
 
 ## Calling it
 
@@ -134,7 +134,7 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 - The step limit is `ceil(chain × ai_timeout / 60) + 2` minutes, so a model that times out is not retried: the next one is tried. `Resolve models` rejects a chain whose step limit plus two minutes exceeds the job's 45 minutes, since a job timeout is a cancellation, which `continue-on-error` does not cover. A rejected request (429, 5xx) is retried twice on the same model first (`num_retries`); slow rejections can still use up the step limit, which the failure comment then reports.
 - `enable_large_pr_chunking` in `.pr_agent.toml` sends the chunks in parallel, so it does not extend the step time.
 - `output_run_details = true` in `.pr_agent.toml` (a `[config]` key, as is `repo_context_files`) makes the review name the model that answered, so a fallback answer is visible. It also shows the tokens, the time and the number of AI calls.
-- Run time and tokens depend on the size of the PR and on the endpoint's latency. A tiny PR takes about 2k input tokens and one call; larger diffs and the review rules in `repo_context_files` raise it (13–17k in earlier tests). In periods of slow inference a single call takes several minutes (about 4.5 to 6 minutes in testing), so a run of a few minutes is not a failure; size `ai_timeout` for the slowest case.
+- Run time and tokens depend on the size of the PR and on the endpoint's latency. A tiny PR takes about 2k input tokens and one call; larger diffs and the review rules in `repo_context_files` raise it (13–17k in tests). In periods of slow inference a single call takes several minutes (about 4.5 to 6 minutes in testing), so a run of a few minutes is not a failure; size `ai_timeout` for the slowest case.
 
 ### Reading a run's log
 
@@ -148,8 +148,8 @@ Callers use `pull_request_target` because fork PRs get no secrets under `pull_re
 
 This repository's [`self-test.yml`](../.github/workflows/self-test.yml) runs on every pull request, on `main`, weekly and on demand:
 
-- pre-commit (actionlint, shellcheck) and zizmor on the workflows;
-- the script tests: [`test-authorize.sh`](../pr-agent/tests/test-authorize.sh) (permission levels, API errors, the event matrix, inputs, setting arguments, long comments), [`test-command-filter.py`](../pr-agent/tests/test-command-filter.py) (differential, against PR Agent 0.50.0's parser), [`test-resolve-models.sh`](../pr-agent/tests/test-resolve-models.sh) (every validation and the derived timeout), [`test-report-outcome.sh`](../pr-agent/tests/test-report-outcome.sh) (0, 1 and several comments, success and failure, job results) and the [structure test](../pr-agent/tests/test-workflow-structure.py);
+- pre-commit and zizmor on the workflows;
+- the script tests: [`test-authorize.sh`](../pr-agent/tests/test-authorize.sh) (permission levels, API errors, the event matrix, inputs, setting arguments, long comments), [`test-command-filter.py`](../pr-agent/tests/test-command-filter.py) (differential, against a copy of the pinned image's comment parser), [`test-resolve-models.sh`](../pr-agent/tests/test-resolve-models.sh) (every validation and the derived timeout), [`test-report-outcome.sh`](../pr-agent/tests/test-report-outcome.sh) (0, 1 and several comments, success and failure, job results) and the [structure test](../pr-agent/tests/test-workflow-structure.py);
 - that the pinned image digest exists, and a warning if its tag has moved;
 - the keyless path through a **local** call with `test_pr` (this repository's merged PR 1, forced dry run): `authorize` and `Resolve models` run on the commit under test, `pr-agent` and `report` are skipped, and no deployment is recorded.
 
@@ -177,7 +177,7 @@ Released with the agent review: semver tags on reviewed commits of `main`, no mo
 
 ### Release checklist
 
-In addition to the agent review's [release checklist](agent-review.md#release-checklist), before `v0.1.0`:
+In addition to the agent review's [release checklist](agent-review.md#release-checklist), before tagging:
 
 1. A caller test with the key (`pull_request`, environment widened to the test branch) on a fixture PR: a posted review, the `Applying repo settings (sections: [...])` log line, `Model 'openai/...'` in `authorize`.
 2. A forced failure (`ai_timeout: "1"`): the failure comment is posted; a following successful run removes it.

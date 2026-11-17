@@ -6,8 +6,7 @@ product). Wire: OpenAI chat, through AWF's OpenAI listener.
 
 ## Version and upgrades
 
-Pinned to 2.2.7 through `package.json` and `package-lock.json` (npm integrity
-hash). The adapter installs the platform package
+Pinned through `package.json` and `package-lock.json` (npm integrity hash). The adapter installs the platform package
 `@opencode/cli-linux-x64-baseline` directly: the `@opencode/cli` wrapper only
 hard-links that same binary in a postinstall script, and its lockfile pulls
 the binaries of every platform (992 MB instead of 247 MB). `baseline` also
@@ -32,25 +31,19 @@ release still has the flags and environment variables used in `run.sh`.
   `execute`, `opencode_*`. Left: `glob`, `grep`, `read`, `shell`, `skill`.
   `shell` is not restricted (an allowlist is possible but would block
   harmless read-only commands); the sandbox is the boundary.
-- `agents.build.steps` caps a run at 35 model steps, below AWF's
-  `apiProxy.maxTurns`. opencode makes one more request first, for the session
-  title. At the last step tools are disabled, so the model has to answer.
-
-- **Request timeouts** are provider settings, both 300 s. `headerTimeout`
-  is the wait for response headers (opencode's default, set explicitly).
-  `chunkTimeout` is the wait for the next event of a streamed response,
-  including the first one after the headers (the default is 900 s, most of
-  the harness timeout); a stream that keeps sending is never cut. opencode
-  retries a timed-out request after 2, 4 and 8 s, but at most 3 times per
-  run, and that limit cannot be configured: a run waits at most 4 x the
-  timeout for a service that answers nothing. That is why neither value is
-  lower: in the v0.1.0 release validation, a review succeeded after 13
-  minutes without an answer, and one request was answered after 185 s
-  without headers. A service that sends its headers at once and then
-  queues the request is silent in the same way under `chunkTimeout`, so it
-  gets the same wait. `../../tests/test-harness-stall.sh` checks this
-  against a server that stalls; run it after changing these values or the
-  pinned version, since the retry limit may change with it.
+- `agents.build.steps` caps a run at `MAX_STEPS` model steps (`run.sh`),
+  below AWF's `apiProxy.maxTurns`. opencode makes one more request first, for
+  the session title. At the last step tools are disabled, so the model has
+  to answer.
+- **Request timeouts** are the provider settings `headerTimeout` (the wait
+  for response headers) and `chunkTimeout` (the wait for the next event of a
+  streamed response, including the first one after the headers); a stream
+  that keeps sending is never cut. opencode retries a timed-out request
+  after 2, 4 and 8 s, but at most 3 times per run, and that limit cannot be
+  configured. The values, and why neither is lower, are in `run.sh`.
+  `../../tests/test-harness-stall.sh` checks them against a server that
+  stalls; run it after changing them or the pinned version, since the retry
+  limit may change with it.
 
 ## Outbound calls
 
@@ -63,5 +56,6 @@ vLLM ports), which is harmless.
 
 `opencode run --format json` writes JSONL. The review is the text after the
 last `tool_use` event (`run-review` then drops anything before its first
-`### ` heading, such as a note that the step cap was reached). opencode exits 0 when the step cap ends a run without
-an answer (then `run.sh` exits 2) and 1 when the endpoint is unreachable.
+`### ` heading, such as a note that the step cap was reached). opencode
+exits 0 when the step cap ends a run without an answer (then `run.sh` exits
+2) and 1 when the endpoint is unreachable.

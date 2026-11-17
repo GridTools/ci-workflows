@@ -8,8 +8,8 @@ Responses API, which CSCS does not serve).
 
 ## Version and upgrades
 
-Pinned to 1.5.2 through `package.json` and `package-lock.json` (npm integrity
-hashes for all 123 packages). Pi needs Node.js >= 22.19.0, so the adapter
+Pinned through `package.json` and `package-lock.json` (npm integrity hashes
+for every package). Pi needs Node.js >= 22.19.0, so the adapter
 ships its own: `node.pin` holds the version and the SHA-256 of the official
 `linux-x64` tarball, from `SHASUMS256.txt`. `npm ci --ignore-scripts` skips
 the install scripts of two dependencies (`@google/genai`, `protobufjs`); Pi
@@ -39,19 +39,16 @@ To upgrade, set the version in `package.json` and regenerate the lockfile with
   bound is AWF's request rate limits and the harness timeout (see
   `../../awf.yaml`).
 - **Request timeouts and retries** come from `settings.json` in the same
-  directory. `httpIdleTimeoutMs` is 240 s (Pi's default is 300 s; one
-  setting for both waits): a request that gets no response headers, or no
-  further chunk of a streamed response, for that long is ended and retried;
-  a stream that keeps sending is never cut. It is not lower because, in the
-  v0.1.0 release validation, a request was answered after 185 s without
-  headers. `retry.maxRetries` is 5 (default 3; the delay doubles from
-  `retry.baseDelayMs`, 2 s as by default, and the count starts again after
-  a successful request): 6 attempts of
-  240 s exceed the harness timeout, so a run waits for a silent service as
-  long as it did with the defaults (4 x 300 s). Every attempt counts
-  against AWF's request limits. `../../tests/test-harness-stall.sh` checks
-  this against a server that stalls; run it after changing these values or
-  the pinned version.
+  directory. `httpIdleTimeoutMs` is one setting for both waits: a request
+  that gets no response headers, or no further chunk of a streamed
+  response, for that long is ended and retried; a stream that keeps sending
+  is never cut. `retry.maxRetries` is raised above Pi's default (the delay
+  doubles from `retry.baseDelayMs`, and the count starts again after a
+  successful request), so that the shorter timeout does not shorten how long
+  a run waits for a silent service. The values and their reasons are in
+  `run.sh`. Every attempt counts against AWF's request limits.
+  `../../tests/test-harness-stall.sh` checks this against a server that
+  stalls; run it after changing these values or the pinned version.
 
 ## Outbound calls
 

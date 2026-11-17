@@ -1,9 +1,9 @@
 # Harness adapters
 
 Each subdirectory adapts one coding-agent harness to the agent review
-pipeline (see `docs/agent-review.md`). All files here are
-read from the reusable workflow's own commit (`job.workflow_sha`), never from
-the pull request or the calling repository.
+pipeline (see `docs/agent-review.md`). All files here are read from the
+reusable workflow's own commit (`job.workflow_sha`), never from the pull
+request or the calling repository.
 
 | File         | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -19,14 +19,15 @@ The harness name must also be added to the harness allowlist in
 `none`: the `review-keyless` job); both jobs check that the `wire` agrees.
 Callers that offer it add it to their `workflow_dispatch` choice.
 
-Recommended: `opencode` with `zai-org/GLM-5.3-Flash`, `pi` as the alternative.
-
 `common.sh` holds the helpers the adapters share: the scratch `HOME`, `NO_PROXY` for loopback and the listeners, and bounded diagnostics.
 
-| Harness               | Version | Wire          | Ignores the repository's configuration with | Own turn cap |
-| --------------------- | ------- | ------------- | ------------------------------------------- | ------------ |
-| [opencode](opencode/) | 2.2.7   | `openai-chat` | `OPENCODE_DISABLE_PROJECT_CONFIG=1`         | 35 steps     |
-| [pi](pi/)             | 1.5.2   | `openai-chat` | `--no-approve --no-context-files`           | none         |
+| Harness               | Wire          | Ignores the repository's configuration with | Own turn cap             |
+| --------------------- | ------------- | ------------------------------------------- | ------------------------ |
+| [opencode](opencode/) | `openai-chat` | `OPENCODE_DISABLE_PROJECT_CONFIG=1`         | `MAX_STEPS` in `run.sh`  |
+| [pi](pi/)             | `openai-chat` | `--no-approve --no-context-files`           | none                     |
+
+Each harness's version is pinned in its `package.json`; which harness and
+model to use is in `docs/agent-review.md` (Configuration notes).
 
 `stub` makes no model call and writes a fixed review with hostile content
 (@mentions of a handle that is not a valid login, HTML comments imitating
