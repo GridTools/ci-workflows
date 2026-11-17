@@ -214,7 +214,8 @@ test_explain_cancelled_while_queued() {
 
 test_explain_failure_before_the_sandbox() {
   local out
-  out=$(explain --result missing --keyed false --review-result failure --started true) &&
+  out=$(explain --result missing --keyed false --review-result failure --started true \
+    --fetch-outcome skipped --outcome skipped --exit-code "") &&
     assert "says before the sandbox" grep -qF "the 'review-keyless' job failed before the sandbox ran" <<<"${out}" &&
     assert "points at the failed step" grep -qF "See the failed step of the 'review-keyless' job" <<<"${out}"
 }

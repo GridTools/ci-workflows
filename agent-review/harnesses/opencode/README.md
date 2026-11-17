@@ -36,6 +36,19 @@ release still has the flags and environment variables used in `run.sh`.
   `apiProxy.maxTurns`. opencode makes one more request first, for the session
   title. At the last step tools are disabled, so the model has to answer.
 
+- **Request timeouts** are provider settings: `headerTimeout` 300 s (the
+  wait for response headers; opencode's default, set explicitly) and
+  `chunkTimeout` 120 s (the wait between two chunks of a streamed response;
+  the default is 900 s, most of the harness timeout). A stream that keeps
+  sending is never cut. opencode retries a timed-out request after 2, 4 and
+  8 s, but at most 3 times per run, and that limit cannot be configured: a
+  run waits at most 4 x `headerTimeout` for a service that answers nothing.
+  That is why the header timeout is not lower: in the v0.1.0 release
+  validation, reviews succeeded after 13 minutes without an answer, which a
+  shorter wait would have ended. `../../tests/test-harness-stall.sh` checks
+  this against a server that stalls; run it after changing these values or
+  the pinned version, since the retry limit may change with it.
+
 ## Outbound calls
 
 `models.opencode.ai` (model catalogue), suppressed with

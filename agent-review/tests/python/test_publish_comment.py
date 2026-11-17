@@ -493,9 +493,11 @@ def test_explain_keyless_job_without_runner_does_not_name_the_environment() -> N
 
 
 def test_explain_failure_before_the_sandbox() -> None:
-    reason, where = explain(started=True)
-    assert reason == "the 'review' job failed before the sandbox ran (job result 'failure')"
-    assert "See the failed step of the 'review' job" in where
+    # As seen in a run: the steps after a failed one report 'skipped'.
+    for fetch_outcome, outcome in (("skipped", "skipped"), ("", "")):
+        reason, where = explain(started=True, fetch_outcome=fetch_outcome, outcome=outcome)
+        assert reason == "the 'review' job failed before the sandbox ran (job result 'failure')"
+        assert "See the failed step of the 'review' job" in where
 
 
 def test_explain_harness_failure_keeps_its_message() -> None:

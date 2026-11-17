@@ -332,7 +332,9 @@ def explain(
             f"the '{job}' job did not run: it ended before it got a runner (job result '{review_result}', no step ran)",
             f"See the annotation on the '{job}' job. {no_logs}",
         )
-    if not fetch_outcome:
+    # A step after a failed one is 'skipped'; the output is empty if the job
+    # ended in its first steps.
+    if fetch_outcome in ("", "skipped"):
         return (
             f"the '{job}' job failed before the sandbox ran (job result '{review_result}')",
             f"See the failed step of the '{job}' job. No sandbox ran, so there are no sandbox logs.",
