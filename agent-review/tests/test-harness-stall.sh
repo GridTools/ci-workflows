@@ -62,7 +62,7 @@ if [ "${SCALE}" -ne 1 ]; then
 fi
 
 # Seconds: how long each harness waits for headers and between chunks; the
-# longest wait seen before an answer; and a silence longer than 4
+# 185 s of the slow answer; and a silence longer than 4
 # attempts of Pi's timeout (3 retries, Pi's default) but shorter than what
 # either harness must sit out.
 OPENCODE_HEADER=$(($(constant opencode HEADER_TIMEOUT_MS) / 1000))

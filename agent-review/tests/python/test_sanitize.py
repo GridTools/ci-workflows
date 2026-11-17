@@ -2,8 +2,8 @@
 
 The oracles here are independent of the module's tables: the invisible
 characters are a UTF-8 byte pattern matched on each character's encoding,
-plus Unicode category Cf from ``unicodedata``. The property tests use seeded ``random`` (no extra
-dependency) over random and adversarial inputs.
+plus Unicode category Cf from ``unicodedata``. The property tests use
+seeded ``random`` (no extra dependency) over random and adversarial inputs.
 """
 
 import random

@@ -177,7 +177,7 @@ Released with the agent review: semver tags on reviewed commits of `main`, no mo
 
 ### Release checklist
 
-In addition to the agent review's [release checklist](agent-review.md#release-checklist), before tagging:
+In addition to the agent review's [release checklist](agent-review.md#release-checklist), before `v0.1.0`:
 
 1. A caller test with the key (`pull_request`, environment widened to the test branch) on a fixture PR: a posted review, the `Applying repo settings (sections: [...])` log line, `Model 'openai/...'` in `authorize`.
 2. A forced failure (`ai_timeout: "1"`): the failure comment is posted; a following successful run removes it.

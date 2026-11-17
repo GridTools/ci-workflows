@@ -384,7 +384,7 @@ def test_out_holds_only_run_reviews_files(
 
 
 def test_deep_history_deepens_the_fetch(tmp_path: pathlib.Path, upstream: Upstream) -> None:
-    """The merge base lies beyond the first fetch's depth (50), so the fetch deepens."""
+    """The merge base lies beyond the first fetch's depth, so the fetch deepens."""
     fork_sha, base_sha, head_sha = upstream.make(FORK, {}, {"AGENTS.md": "PR\n"}, depth=60)
     root = make_root(tmp_path / "root", rules="AGENTS.md\n")
     ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)
@@ -628,7 +628,7 @@ def test_pr_changing_an_intermediate_hop_fails_closed(tmp_path: pathlib.Path, up
 
 
 def test_out_that_cannot_be_emptied_is_replaced(tmp_path: pathlib.Path, upstream: Upstream) -> None:
-    """A read-only directory in out/ made removing out/ fail: no meta.json, a planted review left."""
+    """A read-only directory in out/ makes removing out/ fail; out/ is replaced, so no planted review stays."""
     _, base_sha, head_sha = upstream.make(FORK, {}, {})
     root = make_root(tmp_path / "root")
     ws = make_ws(tmp_path / "ws", head=head_sha, base=base_sha)

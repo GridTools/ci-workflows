@@ -16,7 +16,7 @@ Why-statement: In the context of repositories that each run their own copy of a 
 
 ## Decision
 
-- `.github/workflows/pr-agent.yml` (`on: workflow_call`) and `pr-agent/` (scripts `authorize`, `resolve-models`, `report-outcome`, `api-bases.txt`, tests).
+- `.github/workflows/pr-agent.yml` (`on: workflow_call`) and `pr-agent/` (scripts `authorize`, `check-command`, `resolve-models`, `report-outcome`, `api-bases.txt`, tests).
 - Three jobs. `authorize` has no environment and no secret: it validates the inputs, applies the event rules and the writer check, applies the `--` filter, and resolves the model chain. `pr-agent` alone declares the caller's environment and receives the key; it runs only the image, pinned by digest, and a key check, no script and no checkout. `report` has no secret and posts or removes the single failure comment, also after a failed `pr-agent` job (environment denial, image pull, missing key). So a refused comment or a non-writer never reaches the environment and records no deployment.
 - Any PR Agent command runs, but no comment with a setting argument: `bin/check-command` over-approximates PR Agent's parser (quotes and backslashes removed, `--` refused unless it directly follows a letter, digit or `_`). A differential test runs it against a copy of the parser, and fails when the image changes until the copy is re-checked.
 - Model output writes no labels through the review and no PR description: the review-label settings and `pr_description.publish_labels` are off and `/describe` posts a comment, set in the step environment so that a failed fetch of `.pr_agent.toml` cannot change them; comments cannot override them.
