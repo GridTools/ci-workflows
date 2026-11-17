@@ -674,7 +674,8 @@ jobs:
 
       # Off by default: artifacts of public repositories are downloadable by
       # any signed-in user. The AWF probe found no key or auth header in the
-      # audit files or the proxy logs.
+      # audit files or the proxy logs, nor did a count-only scan of an audit
+      # artifact from a keyed run with these flags.
       - &audit-readable
         name: Make the AWF audit log readable
         if: always() && steps.key.outputs.skipped != 'true' && inputs.upload_audit

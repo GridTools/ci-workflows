@@ -5,7 +5,7 @@ The reusable `PR Agent` workflow ([`.github/workflows/pr-agent.yml`](../.github/
 An adopting repository adds a small **caller workflow** that calls this one pinned by commit SHA, and keeps its own triggers, environment, key, event policy, `.pr_agent.toml` and review rules. The design is in [ADR 0003](adr/0003-pr-agent-reusable-workflow.md).
 
 > [!NOTE]
-> **Status: `v0.1.0`, the first release.** The workflow has run through this repository's self-test (a local call in dry run, which never starts the keyed job) and from a separate test caller with a real key: a posted review, `pull_request_target` and `issue_comment` runs (`/review`), and refusals for a non-writer's PR, a non-writer's comment and a `--` argument. Caller tests with a real key ([caller test mode](#caller-test-mode)) covered a refused environment, a missing and a wrong key, forced timeouts, and the failure comment's update and removal. See the [release checklist](#release-checklist).
+> **Status: `v0.1.0`, the first release.** The workflow has run through this repository's self-test (a local call in dry run, which never starts the keyed job) and from a separate test caller with a real key: a posted review, `pull_request_target` and `issue_comment` runs (`/review`), and refusals for a non-writer's PR, a non-writer's comment and a `--` argument. The caller tests recorded in the pull request that added it ([caller test mode](#caller-test-mode), real key) covered a refused environment, a missing and a wrong key, forced timeouts, and the failure comment's update and removal. See the [release checklist](#release-checklist).
 
 ## Calling it
 
