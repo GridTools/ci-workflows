@@ -108,7 +108,7 @@ test_missing_model() { setup; export IN_MODEL=''; denied "No model given for har
 test_multiline_model() { setup; export IN_MODEL=$'zai-org/GLM\nrm -rf'; denied "Invalid model id"; }
 test_model_with_space() { setup; export IN_MODEL='a b'; denied "Invalid model id"; }
 
-# --- S1: the key must be an environment secret -----------------------------------
+# --- The key must be an environment secret ----------------------------------------
 test_shared_key_is_rejected() {
   setup
   export HAS_SHARED_KEY=true
@@ -138,7 +138,7 @@ test_caps() {
   done
 }
 
-# --- M2: api_base is an allowlist entry ---------------------------------------------
+# --- api_base is an allowlist entry -------------------------------------------------
 test_api_base_allowlist() {
   local v
   for v in https://1.2.3.4/v1 https://api.inference.cscs.ch:443/v1 https://user@api.inference.cscs.ch/v1 \
@@ -153,7 +153,7 @@ test_api_base_allowlist() {
 }
 test_api_base_empty_means_default() { setup; export IN_API_BASE=''; allowed && assert "default" test "$(out api_base)" = "${CSCS}"; }
 
-# --- S5: paths, label, environment, project --------------------------------------------
+# --- Paths, label, environment, project ------------------------------------------------
 test_rule_file_paths() {
   local v
   for v in '../etc/passwd' 'a..b.md' 'docs/../AGENTS.md' '/etc/passwd' 'a//b.md' './AGENTS.md' 'a/./b.md' \

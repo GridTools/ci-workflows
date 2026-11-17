@@ -1,4 +1,4 @@
-"""agent_review.prompt: the PR title and body as data, caps, nonce delimiters, bash-identical rendering."""
+"""agent_review.prompt: the PR title and body as data, caps, nonce delimiters, rendering against a jq oracle."""
 
 import json
 import pathlib
@@ -12,7 +12,7 @@ from agent_review.review_errors import Fatal
 
 AR_DIR = pathlib.Path(__file__).resolve().parents[2]
 
-# The bash version's pipelines, run as the oracle on the same pr.json.
+# Independent oracle: jq and iconv pipelines on the same pr.json.
 BASH_FIELDS = r"""
 set -euo pipefail
 clip() { head -c "$1" | { iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true; }; }
@@ -180,8 +180,8 @@ def test_render_is_one_pass() -> None:
 
 
 def test_title_cannot_multiply_the_body() -> None:
-    """With sequential substitution, each '{{PR_BODY}}' in the title expanded the body:
-    46 of them in a 512-byte title gave a prompt of about 774 KB."""
+    """Sequential substitution would expand the body at each '{{PR_BODY}}' in the title:
+    46 of them fit in a 512-byte title, for a prompt of about 774 KB."""
     template = (AR_DIR / "prompt.md.tmpl").read_bytes()
     title = prompt.title_bytes("{{PR_BODY}}" * 46)
     body = prompt.body_bytes("b" * 20000)

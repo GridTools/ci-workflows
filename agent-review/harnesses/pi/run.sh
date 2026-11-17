@@ -24,14 +24,14 @@ readonly CONTEXT_WINDOW=128000 MAX_TOKENS=16384
 # A request that sends nothing for this long (no response headers, or no
 # further chunk of a streamed response) is ended and retried; Pi's default
 # is 300 s, and it has one setting for both waits. A live stream sends a
-# chunk every few seconds; its total duration is not limited. Not lower: in
-# the v0.1.0 release validation a request was answered after 185 s without
-# headers, and whether a new request would have been answered sooner is not
-# known. The retries (Pi's default is 3; the delay doubles from 2 s, Pi's
-# default, set here so that the stall test can scale it) are
-# raised so that the time a run can wait for a service that answers nothing
-# is not shortened: 6 attempts of 240 s exceed the harness time limit, which
-# stays the bound. Each attempt counts against AWF's request limits.
+# chunk every few seconds; its total duration is not limited. Not lower:
+# the real service has answered a request after 185 s without headers, and
+# whether a new request would have been answered sooner is not known. The
+# retries are raised from Pi's default of 3 so that the lower timeout does
+# not shorten how long a run can wait for a service that answers nothing:
+# 6 attempts of 240 s exceed the harness time limit, which stays the bound.
+# The delay (doubling from Pi's default of 2 s) is set here so that the
+# stall test can scale it. Each attempt counts against AWF's request limits.
 readonly IDLE_TIMEOUT_MS=240000 MAX_RETRIES=5 RETRY_BASE_DELAY_MS=2000
 
 export PI_CODING_AGENT_DIR="${SCRATCH}/agent" PI_OFFLINE=1 PI_TELEMETRY=0

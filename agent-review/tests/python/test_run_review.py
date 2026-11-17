@@ -765,7 +765,7 @@ def test_base_symlink_to_an_uncovered_path_fails_closed(  # noqa: PLR0917 (pytes
 def test_existing_case_fails_closed_under_wildcard_caller_patterns(
     tmp_path: pathlib.Path, upstream: Upstream, extra: str
 ) -> None:
-    """'.claude/skills -> ../skills' must fail whatever the caller's patterns (it passed under '*/x.md')."""
+    """'.claude/skills -> ../skills' must fail whatever the caller's patterns, wildcard ones included."""
     fork = {**FORK, "skills/s.md": "x\n", ".claude/settings.json": "{}\n", ".claude/skills": "-> ../skills"}
     ws, log = fetch(tmp_path, upstream, fork, {"skills/s.md": "PR\n"}, extra=extra)
     assert_stopped(ws, log)

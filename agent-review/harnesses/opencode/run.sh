@@ -21,9 +21,9 @@ readonly MAX_STEPS=35
 # time a run can wait for a service that answers nothing is 4 x the
 # timeout. So the wait for response headers stays at opencode's default,
 # set here so that an upgrade cannot change it unnoticed: a lower value
-# would end runs that succeed today after a long wait (in the v0.1.0
-# release validation, 13 minutes without an answer, and a request answered
-# after 185 s without headers). The chunk timeout is the wait for the next
+# would end runs that succeed after a long wait (seen with the real
+# service: 13 minutes without an answer, and a request answered after
+# 185 s without headers). The chunk timeout is the wait for the next
 # event of a streamed response, and also for the FIRST one after the
 # headers: a service that sends headers at once and then queues the
 # request, or a model that thinks for a while before its first token, is

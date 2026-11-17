@@ -5,11 +5,11 @@
 #
 # Runs in the secretless 'prepare' job, and never executes the harness
 # there: that job runs on the host with sudo and the runner's cache token.
-# run.sh checks the version inside the sandbox. Depends on the Linux x64 'baseline'
-# platform package directly (it runs on CPUs without AVX2, too) instead of
-# the '@opencode/cli' wrapper, whose postinstall script only hard-links this
-# same binary and whose lockfile pulls the binaries of every platform. No
-# install scripts run.
+# run.sh checks the version inside the sandbox. Depends on the Linux x64
+# 'baseline' platform package directly (it runs on CPUs without AVX2, too)
+# instead of the '@opencode/cli' wrapper, whose postinstall script only
+# hard-links this same binary and whose lockfile pulls the binaries of every
+# platform. No install scripts run.
 
 set -euo pipefail
 

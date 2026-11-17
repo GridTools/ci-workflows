@@ -1,9 +1,8 @@
 """agent_review.sanitize: the review sanitiser of publish-comment (invariant 5).
 
 The oracles here are independent of the module's tables: the invisible
-characters are the bash version's UTF-8 byte pattern, copied verbatim and
-matched on each character's encoding, plus Unicode category Cf from
-``unicodedata``. The property tests use seeded ``random`` (no extra
+characters are a UTF-8 byte pattern matched on each character's encoding,
+plus Unicode category Cf from ``unicodedata``. The property tests use seeded ``random`` (no extra
 dependency) over random and adversarial inputs.
 """
 
@@ -19,12 +18,12 @@ from workflow_structure import import_closure
 
 ZWSP, ZWJ = "\u200b", "\u200d"
 MARKER = "<!-- agent-review:"
-# The bash version's INVISIBLE pattern, byte for byte (matched under LC_ALL=C).
+# The invisible characters as UTF-8 bytes, written independently of sanitize.INVISIBLE.
 BASH_INVISIBLE = re.compile(
     rb"\xc2\xad|\xd8\x9c|\xe1\xa0\x8e|\xe2\x80[\x8b-\x8f\xaa-\xae]|\xe2\x81[\xa0-\xaf]|\xef\xb8[\x80-\x8f]"
     rb"|\xef\xbb\xbf|\xf3\xa0[\x80\x81][\x80-\xbf]|\xf3\xa0[\x84-\x87][\x80-\xbf]"
 )
-# The bash version's 'tr -d' set.
+# The dropped controls, as bytes.
 BASH_CONTROLS = re.compile(rb"[\x00-\x08\x0b-\x1f\x7f]")
 LOGIN_CHAR = re.compile(r"[A-Za-z0-9]", re.ASCII)
 
@@ -113,9 +112,8 @@ def test_clean(text: str, want: str) -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        # Each rendered as nothing (or as an invisible soft hyphen) on GitHub
-        # before every '<' + letter, '/', '!' or '?' was broken up (checked
-        # with 'gh api markdown', render only).
+        # GitHub renders each as nothing (or as an invisible soft hyphen)
+        # unless the '<' is broken up (checked with 'gh api markdown').
         '<b foo="TEXT">v</b>\n',
         "<span>\n</span TEXT>\n",
         "<div>\nA </1 TEXT> B\n</div>\n",
@@ -148,8 +146,8 @@ def test_unicode_digits_and_letters_are_not_login_characters() -> None:
         b"\xff",
         b"\xc0\x80",  # overlong
         b"\xed\xa0\x80",  # surrogate
-        b"\xf4\x90\x80\x80",  # above U+10FFFF (glibc iconv accepted it)
-        b"\xf8\x88\x80\x80\x80",  # 5-byte form (glibc iconv accepted it)
+        b"\xf4\x90\x80\x80",  # above U+10FFFF (glibc iconv accepts it)
+        b"\xf8\x88\x80\x80\x80",  # 5-byte form (glibc iconv accepts it)
         b"a\xe2\x80",  # truncated
     ],
 )

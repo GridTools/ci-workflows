@@ -413,13 +413,13 @@ def comment(cid: int, login: str, body: str) -> dict[str, object]:
 
 
 def test_huge_foreign_first_lines_do_not_block_the_upsert(jq_gh: tuple[pathlib.Path, dict[str, str]]) -> None:
-    """300 comments with 60 KB first lines: the unbounded projection passed runner's 16 MiB cap."""
+    """300 comments with 60 KB first lines: an unbounded projection would pass runner's output cap."""
     directory, env = jq_gh
     huge = [comment(1000 + i, "some-user", "x" * 60000 + "\nrest") for i in range(300)]
     comments = [*huge, comment(42, "github-actions[bot]", f"{MARKER}\nold review")]
     path = directory / "comments.json"
     path.write_text(json.dumps(comments))
-    # Negative control: the old projection's output is over the cap.
+    # Negative control: the unbounded projection's output is over the cap.
     old_jq = '.[] | [.id, .user.login, (.body | split("\\n") | .[0])] | @tsv'
     old = subprocess.run(["/usr/bin/jq", "-r", old_jq, str(path)], capture_output=True, check=True).stdout
     assert len(old) > runner.MAX_STDOUT_BYTES

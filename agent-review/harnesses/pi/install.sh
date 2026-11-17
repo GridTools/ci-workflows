@@ -6,8 +6,8 @@
 #
 # Runs in the secretless 'prepare' job, and never executes the harness or its
 # Node.js there: that job runs on the host with sudo and the runner's cache
-# token. run.sh checks the version inside the sandbox. Pi is pure JavaScript and WebAssembly
-# without native addons; no install scripts run.
+# token. run.sh checks the version inside the sandbox. Pi is pure JavaScript
+# and WebAssembly without native addons; no install scripts run.
 
 set -euo pipefail
 

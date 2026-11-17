@@ -2,9 +2,9 @@
 # Integration test for bin/run-review with the 'stub' harness, WITHOUT AWF.
 #
 # Needs network access to github.com: it reviews the self-test's fixture, a
-# merged public PR that changes AGENTS.md, and commit 64c83aa0 against its parent,
-# which adds instruction files at several depths, so both branches of the
-# instruction-file reset are exercised. Run in CI by the self-test workflow.
+# merged public PR that changes AGENTS.md, and commit 64c83aa0 against its
+# parent, which adds instruction files at several depths, so the reset both
+# restores and removes files.
 
 set -uo pipefail
 # shellcheck source=lib.sh
@@ -87,7 +87,7 @@ test_removes_instruction_files_added_by_the_pr() {
   assert "unrelated file kept" test -f "${repo}/.gitignore"
 }
 
-# The reset's post-condition (security review S4). Commit 64c83aa0 adds
+# The reset's post-condition. Commit 64c83aa0 adds
 # src/gt4py/next/AGENTS.md, which its parent lacks. The central list is
 # narrowed in the test's trusted root so that only the caller's patterns
 # decide.
