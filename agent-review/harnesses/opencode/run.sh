@@ -16,6 +16,23 @@ adapter_init opencode
 # at the last step tools are disabled and the model has to answer.
 readonly MAX_STEPS=35
 
+# Request timeouts, in milliseconds. opencode retries a timed-out request,
+# but at most 3 times per run, and that count cannot be configured: the
+# time a run can wait for a service that answers nothing is 4 x the
+# timeout. So the wait for response headers stays at opencode's default,
+# set here so that an upgrade cannot change it unnoticed: a lower value
+# would end runs that succeed today after a long wait (in the v0.1.0
+# release validation, 13 minutes without an answer, and a request answered
+# after 185 s without headers). The chunk timeout is the wait for the next
+# event of a streamed response, and also for the FIRST one after the
+# headers: a service that sends headers at once and then queues the
+# request, or a model that thinks for a while before its first token, is
+# silent there just as long. So it gets the same value as the header wait,
+# not less; opencode's default is 900 s, with which one stream that stops
+# uses most of the harness time limit. A stream that keeps sending is never
+# cut, however long it takes.
+readonly HEADER_TIMEOUT_MS=300000 CHUNK_TIMEOUT_MS=300000
+
 bin="${HARNESS_PREFIX}/node_modules/@opencode/cli-linux-x64-baseline/bin/opencode"
 
 # Ignore the repository's opencode.json(c) and .opencode/ (plugins there are
@@ -31,7 +48,7 @@ check_version "opencode v$(head -n 1 "${HARNESS_PREFIX}/VERSION")" "${bin}" --ve
 # token and replaced by AWF's sidecar. Tools that edit, reach the web, ask
 # questions or spawn subagents are denied; 'shell' stays for git and grep.
 OPENCODE_CONFIG_CONTENT=$(jq -n --arg model "${MODEL}" --arg base "${AWF_API_PROXY_OPENAI_URL%/}/v1" \
-  --argjson steps "${MAX_STEPS}" '{
+  --argjson steps "${MAX_STEPS}" --argjson header "${HEADER_TIMEOUT_MS}" --argjson chunk "${CHUNK_TIMEOUT_MS}" '{
     model: ("awf-proxy/" + $model), update: "disable", share: "disabled",
     experimental: {policies: [
       {action: "provider.use", resource: "*", effect: "deny"},
@@ -40,7 +57,8 @@ OPENCODE_CONFIG_CONTENT=$(jq -n --arg model "${MODEL}" --arg base "${AWF_API_PRO
       | map({action: ., resource: "*", effect: "deny"})),
     agents: {build: {steps: $steps}},
     providers: {"awf-proxy": {name: "AWF proxy", package: "@opencode/ai/providers/openai-compatible",
-      settings: {baseURL: $base, apiKey: "awf-placeholder"}, models: {($model): {name: $model}}}}}')
+      settings: {baseURL: $base, apiKey: "awf-placeholder", headerTimeout: $header, chunkTimeout: $chunk},
+      models: {($model): {name: $model}}}}}')
 export OPENCODE_CONFIG_CONTENT
 
 cd "${REPO_DIR}" || exit 1

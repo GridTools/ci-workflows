@@ -35,9 +35,23 @@ To upgrade, set the version in `package.json` and regenerate the lockfile with
   cannot be restricted; the sandbox is the boundary.
 - The prompt is passed on stdin: with stdin open and no prompt, Pi waits
   forever.
-- **No turn cap and no stall detection**: AWF's `apiProxy.maxTurns` stops a
-  well-behaved run; the bound is AWF's request rate limits and the harness
-  timeout (see `../../awf.yaml`).
+- **No turn cap**: AWF's `apiProxy.maxTurns` stops a well-behaved run; the
+  bound is AWF's request rate limits and the harness timeout (see
+  `../../awf.yaml`).
+- **Request timeouts and retries** come from `settings.json` in the same
+  directory. `httpIdleTimeoutMs` is 240 s (Pi's default is 300 s; one
+  setting for both waits): a request that gets no response headers, or no
+  further chunk of a streamed response, for that long is ended and retried;
+  a stream that keeps sending is never cut. It is not lower because, in the
+  v0.1.0 release validation, a request was answered after 185 s without
+  headers. `retry.maxRetries` is 5 (default 3; the delay doubles from
+  `retry.baseDelayMs`, 2 s as by default, and the count starts again after
+  a successful request): 6 attempts of
+  240 s exceed the harness timeout, so a run waits for a silent service as
+  long as it did with the defaults (4 x 300 s). Every attempt counts
+  against AWF's request limits. `../../tests/test-harness-stall.sh` checks
+  this against a server that stalls; run it after changing these values or
+  the pinned version.
 
 ## Outbound calls
 

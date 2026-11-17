@@ -5,12 +5,21 @@ Usage::
     publish-comment sanitize                      < review > safe-review
     publish-comment render --harness H --version V --model M --head-sha SHA --run-url U --review FILE
     publish-comment post --repo R --pr N --harness H --body-file FILE
+    publish-comment explain --result missing|invalid --keyed true|false --review-result R --started S
+                            --environment E --fetch-outcome F --outcome O --exit-code X
 
 Runs in the ``publish`` job: a fresh VM with a write-capable token, no model
 and no PR code. The review is hostile text (agent_review.sanitize).
 ``sanitize`` and ``render`` read only stdin and files and write stdout; the
 workflow runs ``render`` in a step without a token. Only ``post`` runs
-``gh`` (agent_review.gh), with the token of its step.
+``gh`` (agent_review.gh), with the token of its step. ``explain`` reads
+only its arguments, which the workflow takes from ``needs.*`` (job results
+and step outputs) and the ``environment`` input, never from the review: it
+prints two lines for the "no review" warning, why there is no review and
+where to look. It tells a review job that reported no step (refused by the
+environment's protection rules, cancelled while queued, or its runner
+lost) and one that ended before the sandbox ran from a failure inside the
+sandbox.
 
 Exit codes: 0 on success; 3 if the review is not valid UTF-8, is empty, or
 its file is not a regular file (a symlink, a FIFO, ...) within the size cap
@@ -53,6 +62,21 @@ COMMENT_ID = validate.pattern(r"[1-9][0-9]{0,19}")
 FIRST_LINE_CHARS = 256
 LISTING_JQ = f'.[] | [.id, .user.login, (.body | split("\\n") | .[0] | .[0:{FIRST_LINE_CHARS}])] | @tsv'
 ASCII_WHITESPACE = " \t\n\v\f\r"
+
+# The values 'explain' is given: job results, step outcomes, an exit code,
+# an environment name. Nothing here can end a line or a workflow command.
+EXPLAIN_VALUE = validate.pattern(r"[A-Za-z0-9_.-]{0,64}")
+EXPLAIN_OPTIONS = (
+    "--result",
+    "--keyed",
+    "--review-result",
+    "--started",
+    "--environment",
+    "--fetch-outcome",
+    "--outcome",
+    "--exit-code",
+)
+SANDBOX_LOGS = "See the 'Fetch the pull request in the sandbox' and 'Run the review in the sandbox' logs"
 
 RENDER_OPTIONS = ("--harness", "--version", "--model", "--head-sha", "--run-url", "--review")
 POST_OPTIONS = ("--repo", "--pr", "--harness", "--body-file")
@@ -266,9 +290,100 @@ def cmd_post(args: Sequence[str]) -> bytes:
     return (text + "\n").encode("utf-8")
 
 
+def explain(
+    *,
+    result: str,
+    keyed: bool,
+    review_result: str,
+    started: bool,
+    environment: str,
+    fetch_outcome: str,
+    outcome: str,
+    exit_code: str,
+) -> tuple[str, str]:
+    """Why no review was posted, and where to look: two single-line texts.
+
+    ``started`` is the review job's own first output. Its absence means
+    that the job reported no step: usually GitHub ended it before it got a
+    runner, but a runner lost during the job reports nothing either.
+    """
+    job = "review" if keyed else "review-keyless"
+    if result == "invalid":
+        return (
+            "the review was rejected as invalid (not UTF-8, empty, or not a regular file within the size cap)",
+            f"{SANDBOX_LOGS} of the '{job}' job.",
+        )
+    cancelled = review_result == "cancelled"
+    if not started:
+        # No step reported: GitHub never gave the job a runner, or the
+        # runner was lost (out of memory, disk full, shut down) before the
+        # job's outputs were sent. The two cannot be told apart from here.
+        if cancelled:
+            cause = (
+                "A newer review request for the same pull request replaced it in the keyed job's queue, or the run"
+                " was cancelled."
+                if keyed
+                else "The run was cancelled."
+            )
+            return (
+                f"the '{job}' job was cancelled before it reported a step (job result 'cancelled')",
+                f"{cause} See the '{job}' job.",
+            )
+        reason = (
+            f"the '{job}' job reported no step: it never got a runner, or its runner was lost (job result"
+            f" '{review_result}')"
+        )
+        if keyed:
+            return (
+                reason,
+                f"The usual cause is that the environment '{environment}' refused the job: its deployment branch"
+                " rule (a keyed review runs only from the default branch), a required reviewer, or another"
+                " protection rule. See the annotation on the 'review' job and the environment's settings"
+                " (Settings > Environments). If the environment refused it, no sandbox ran and the inference key"
+                " was not used.",
+            )
+        return (reason, f"See the annotation on the '{job}' job.")
+    # A step after a failed one is 'skipped'; the output is empty if the job
+    # ended in its first steps.
+    if fetch_outcome in ("", "skipped"):
+        how = "was cancelled" if cancelled else "failed"
+        return (
+            f"the '{job}' job {how} before the sandbox ran (job result '{review_result}')",
+            f"See the {'log' if cancelled else 'failed step'} of the '{job}' job. No sandbox ran, so there are no"
+            " sandbox logs.",
+        )
+    return (
+        f"the agent produced no review (fetch outcome '{fetch_outcome}', review outcome '{outcome}',"
+        f" exit code '{exit_code}')",
+        f"{SANDBOX_LOGS} of the '{job}' job.",
+    )
+
+
+def cmd_explain(args: Sequence[str]) -> bytes:
+    opts = parse_options(args, EXPLAIN_OPTIONS)
+    for name, value in opts.items():
+        if not validate.matches(EXPLAIN_VALUE, value):
+            raise Failure(f"Invalid value for '{name}'.")
+    if opts["--result"] not in ("missing", "invalid"):
+        raise Failure(f"Invalid result '{opts['--result']}'.")
+    if opts["--keyed"] not in ("true", "false"):
+        raise Failure(f"Invalid keyed flag '{opts['--keyed']}'.")
+    reason, where = explain(
+        result=opts["--result"],
+        keyed=opts["--keyed"] == "true",
+        review_result=opts["--review-result"],
+        started=opts["--started"] == "true",
+        environment=opts["--environment"],
+        fetch_outcome=opts["--fetch-outcome"],
+        outcome=opts["--outcome"],
+        exit_code=opts["--exit-code"],
+    )
+    return f"{reason}\n{where}\n".encode()
+
+
 def run(argv: Sequence[str]) -> bytes:
     if not argv:
-        raise Failure("Usage: publish-comment sanitize|render|post [options]")
+        raise Failure("Usage: publish-comment sanitize|render|post|explain [options]")
     command, args = argv[0], argv[1:]
     if command == "sanitize":
         # Extra arguments are ignored (part of the CLI contract).
@@ -277,6 +392,8 @@ def run(argv: Sequence[str]) -> bytes:
         return cmd_render(args)
     if command == "post":
         return cmd_post(args)
+    if command == "explain":
+        return cmd_explain(args)
     raise Failure(f"Unknown command '{command}'.")
 
 

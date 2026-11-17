@@ -189,5 +189,60 @@ test_post_refuses_body_without_marker() {
     run_entry "${PC}" post --repo example-org/example --pr 9 --harness stub --body-file body.md >/dev/null 2>&1
 }
 
+explain() { run_entry "${PC}" explain "$@"; }
+
+# The keyed job never got a runner: the message names the environment's
+# rules and does not point at sandbox logs.
+test_explain_environment_denial() {
+  local out
+  out=$(explain --result missing --keyed true --review-result failure --started "" --environment agent-review \
+    --fetch-outcome "" --outcome "" --exit-code "") &&
+    assert "two lines" test "$(wc -l <<<"${out}")" -eq 2 &&
+    assert "says the job reported no step" grep -qF "the 'review' job reported no step: it never got a runner, or its runner was lost" <<<"${out}" &&
+    assert "names the environment" grep -qF "environment 'agent-review' refused the job" <<<"${out}" &&
+    assert "the key claim is conditional" grep -qF "If the environment refused it, no sandbox ran and the inference key was not used" <<<"${out}" &&
+    assert "no pointer to sandbox logs" lacks "Run the review in the sandbox" "${out}"
+}
+
+test_explain_cancelled_while_queued() {
+  local out
+  out=$(explain --result missing --keyed true --review-result cancelled --started "" --environment agent-review) &&
+    assert "says cancelled" grep -qF "was cancelled before it reported a step" <<<"${out}" &&
+    assert "does not blame the environment" lacks "refused the job" "${out}" &&
+    assert "no pointer to sandbox logs" lacks "Run the review in the sandbox" "${out}"
+}
+
+test_explain_failure_before_the_sandbox() {
+  local out
+  out=$(explain --result missing --keyed false --review-result failure --started true \
+    --fetch-outcome skipped --outcome skipped --exit-code "") &&
+    assert "says before the sandbox" grep -qF "the 'review-keyless' job failed before the sandbox ran" <<<"${out}" &&
+    assert "points at the failed step" grep -qF "See the failed step of the 'review-keyless' job" <<<"${out}"
+}
+
+# A real harness failure keeps the message it had.
+test_explain_harness_failure() {
+  local out
+  out=$(explain --result missing --keyed true --review-result success --started true --environment agent-review \
+    --fetch-outcome success --outcome failure --exit-code 124) &&
+    assert "the harness message" grep -qF \
+      "the agent produced no review (fetch outcome 'success', review outcome 'failure', exit code '124')" <<<"${out}" &&
+    assert "points at the sandbox logs" grep -qF "'Run the review in the sandbox' logs of the 'review' job" <<<"${out}" &&
+    assert "does not blame the environment" lacks "refused the job" "${out}"
+}
+
+test_explain_invalid_review() {
+  local out
+  out=$(explain --result invalid --keyed true --review-result success --started true --fetch-outcome success) &&
+    assert "the invalid message" grep -qF "the review was rejected as invalid" <<<"${out}"
+}
+
+test_explain_rejects_unexpected_values() {
+  ! explain --result posted --keyed true 2>/dev/null &&
+    ! explain --result missing --keyed maybe 2>/dev/null &&
+    ! explain --result missing --keyed true --environment $'a\n::error::x' 2>/dev/null &&
+    ! explain --result missing --keyed true --review-result 'a b' 2>/dev/null
+}
+
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do run_test "$t"; done
 summary

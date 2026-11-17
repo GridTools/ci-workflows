@@ -31,6 +31,12 @@ does):
 - the collect gate (collect_gate_problems): 'Collect the result' runs only
   if 'Stop the sandbox' succeeded, because collect-result's single-link
   check relies on no sandbox process being alive.
+- the started signal (started_signal_problems): the first step of both
+  review jobs sets the 'started' output unconditionally, and 'Report a
+  missing review' passes it, the review job's result and the 'keyed' flag
+  to 'publish-comment explain', so a job that reported no step (refused
+  by the environment, cancelled while queued, its runner lost) is not
+  reported as a failure inside the sandbox.
 
 Python (invariant 13, docs/adr/0004-python-runtime.md):
 
@@ -207,6 +213,56 @@ def call_site_problems(workflow: Mapping[str, Any], kinds: Mapping[str, str | No
                 bounded = start == 0 or (start > 0 and CALL_BOUNDARY.fullmatch(before[start - 1]) is not None)
                 if not before.endswith(PYTHON_FORMS[root]) or not bounded or PYTHON_AFTER[root].match(after) is None:
                     problems.append(f"{where}: bin/{name} is Python; call it exactly as {python_call(root, name)}")
+    return problems
+
+
+REVIEW_JOBS = ("review", "review-keyless")
+STARTED_STEP = {
+    "name": "Record that the job started",
+    "id": "started",
+    "run": 'echo "started=true" >> "$GITHUB_OUTPUT"',
+}
+STARTED_OUTPUT = "${{ steps.started.outputs.started }}"
+REPORT_STEP = "Report a missing review"
+REPORT_ENV = {
+    "KEYED": "${{ needs.authorize.outputs.keyed }}",
+    "REVIEW_RESULT": (
+        "${{ needs.authorize.outputs.keyed == 'true' && needs.review.result || needs.review-keyless.result }}"
+    ),
+    "STARTED": "${{ needs.review.outputs.started || needs.review-keyless.outputs.started }}",
+    "ENVIRONMENT": "${{ inputs.environment }}",
+}
+REPORT_ARGUMENTS = (
+    '--keyed "${KEYED}"',
+    '--review-result "${REVIEW_RESULT}"',
+    '--started "${STARTED}"',
+    '--environment "${ENVIRONMENT}"',
+)
+
+
+def started_signal_problems(workflow: Mapping[str, Any]) -> list[str]:
+    """The review jobs say that they started, and 'publish' reads it when no review arrived."""
+    problems = []
+    jobs = workflow["jobs"]
+    for job_id in REVIEW_JOBS:
+        job = jobs.get(job_id, {})
+        steps = job.get("steps", [])
+        # Exactly this step, first: no 'if:', no 'continue-on-error', nothing before it that can fail.
+        if not steps or steps[0] != STARTED_STEP:
+            problems.append(f"{job_id}: the first step is not exactly {STARTED_STEP['name']!r}")
+        if job.get("outputs", {}).get("started") != STARTED_OUTPUT:
+            problems.append(f"{job_id}: no output 'started' from the first step")
+    report = [s for s in jobs.get("publish", {}).get("steps", []) if s.get("name") == REPORT_STEP]
+    if len(report) != 1:
+        return [*problems, f"publish: {len(report)} steps named {REPORT_STEP!r}"]
+    env = report[0].get("env", {})
+    for key, value in REPORT_ENV.items():
+        if env.get(key) != value:
+            problems.append(f"publish/{REPORT_STEP}: env {key} is not {value!r}")
+    script = str(report[0].get("run", ""))
+    for argument in REPORT_ARGUMENTS:
+        if argument not in script:
+            problems.append(f"publish/{REPORT_STEP}: 'explain' is not called with {argument!r}")
     return problems
 
 
